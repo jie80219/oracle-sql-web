@@ -5,6 +5,7 @@ import { DIALECT_NOTES, splitStatements } from './oracle.js';
 import { evaluate, runSql, solutionPreview } from './engine.js';
 import { loadEngine, getSQL, freshDatabase, getSandboxDatabase, resetSandboxDatabase } from './db.js';
 import { attachAutocomplete } from './autocomplete.js';
+import { diagramHtml } from './diagram.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
@@ -518,6 +519,20 @@ async function init() {
     $('sandboxResult').innerHTML = '';
     showFeedback('sandboxFeedback', 'ok', '資料庫已重設', '所有資料回到初始狀態。');
   };
+
+  // 關聯圖：第一次打開才產生內容
+  const dg = $('dgOverlay');
+  const openDiagram = () => {
+    if (!$('dgBody').innerHTML) $('dgBody').innerHTML = diagramHtml();
+    dg.hidden = false;
+  };
+  const closeDiagram = () => { dg.hidden = true; };
+  $('btnDiagram').onclick = openDiagram;
+  $('btnDiagramClose').onclick = closeDiagram;
+  dg.addEventListener('mousedown', (ev) => { if (ev.target === dg) closeDiagram(); });
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape' && !dg.hidden) closeDiagram();
+  });
 
   $('btnTheme').onclick = toggleTheme;
   $('btnResetProgress').onclick = () => {

@@ -57,6 +57,8 @@
 
 `departments`（5 個部門，其中客服部沒有任何員工）、`employees`（12 人，2 人沒有部門、6 人沒有獎金比例）、`projects`（6 案，1 案沒有部門也沒有成員）、`emp_projects`、`salary_grades`、`emp_bonus`（只有 3 筆，讓 MERGE 兩個分支都會走到）、`salary_adjust`（含一筆調降、一筆對應不到員工）、`dual`。
 
+不用背表名。右上角的 **🗺️ 關聯圖** 會把 8 張表、每個欄位的型別、主鍵與外鍵一次畫出來，箭頭指向它參照的欄位，滑過欄位還有中文說明；非等值連接（`salary` 落在 `salary_grades` 的哪個級距）也標在圖例裡。編輯器裡打字則會跳出提示，表名、欄位名、函數都會補，`e.` 這種別名前綴會自動對應到該表的欄位；`Ctrl / ⌘ + Space` 可以手動叫出來。
+
 ## 本機跑
 
 因為用了 ES modules，直接用 `file://` 開會被瀏覽器擋，要起一個本機伺服器：
@@ -86,6 +88,8 @@ js/engine.js            建庫、執行、快照、評分流程
 js/checker.js           結果比對與語法要求檢查
 js/exercises.js         18 個主題、37 題單一練習、6 題組合練習
 js/db.js                sql.js 載入與資料庫管理
+js/diagram.js           資料表關聯圖
+js/autocomplete.js      編輯器的提示字
 js/app.js               介面控制
 test/verify.mjs         Node 測試（npm test）
 vendor/                 sql.js 的 wasm，直接放在 repo 裡，不依賴 CDN
