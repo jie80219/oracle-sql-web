@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Oracle SQL 練習場</title>
+<meta name="description" content="在瀏覽器裡直接練 Oracle SQL：JOIN、集合運算、NVL、CASE WHEN、GROUP BY、MERGE 與 JOIN UPDATE，寫完馬上執行並自動批改。">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23a5382b'/><text y='68' x='50' text-anchor='middle' font-size='42' font-family='monospace' fill='white' font-weight='bold'>SQL</text></svg>">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">SQL</span>
+    <div>
+      <h1>Oracle SQL 練習場</h1>
+      <p>在瀏覽器裡直接執行，寫完立刻批改</p>
+    </div>
+  </div>
+  <div class="topbar-actions">
+    <div class="progress">
+      <span class="progress-track"><span class="progress-fill" id="progressFill"></span></span>
+      <span id="progressText">0 / 0</span>
+    </div>
+    <button class="icon-btn" id="btnResetProgress" title="清除所有作答紀錄">清除進度</button>
+    <button class="icon-btn" id="btnTheme" title="切換深色／淺色">🌓 主題</button>
+  </div>
+</header>
+
+<div class="loading" id="loading">
+  <div class="spinner"></div>
+  正在載入 SQL 引擎與練習資料庫…
+</div>
+
+<div class="layout" id="layout" hidden>
+
+  <aside class="sidebar">
+    <div class="mode-tabs" role="tablist">
+      <button data-mode="single" class="active" role="tab">單一練習</button>
+      <button data-mode="combo" role="tab">組合練習</button>
+      <button data-mode="sandbox" role="tab">自由查詢</button>
+    </div>
+    <div id="navList"></div>
+  </aside>
+
+  <main class="main">
+
+    <section id="exercisePane">
+      <div class="card prompt-card">
+        <div class="chips" id="exChips"></div>
+        <h2 id="exTitle"></h2>
+        <p class="prompt-body" id="exPrompt"></p>
+        <details class="hint" id="hintBox">
+          <summary>看提示</summary>
+          <p id="exHint"></p>
+        </details>
+      </div>
+
+      <div class="card editor-card">
+        <div class="editor-head">
+          <span>你的 SQL</span>
+          <span class="kbd-hint">Ctrl / ⌘ + Enter 執行</span>
+        </div>
+        <div class="editor-wrap">
+          <div class="gutter" id="gutter">1</div>
+          <textarea id="sqlInput" spellcheck="false" autocomplete="off" autocapitalize="off"
+                    placeholder="-- 在這裡寫你的 Oracle SQL"></textarea>
+        </div>
+        <div class="toolbar">
+          <button class="btn primary" id="btnCheck">檢查答案</button>
+          <button class="btn" id="btnRun">只執行看看</button>
+          <button class="btn ghost" id="btnSolution">看解答</button>
+          <button class="btn ghost" id="btnClear">清空</button>
+        </div>
+      </div>
+
+      <div id="feedback" class="feedback" hidden></div>
+      <div id="resultArea"></div>
+    </section>
+
+    <section id="sandboxPane" hidden>
+      <div class="card prompt-card">
+        <div class="chips"><span class="chip topic">自由查詢</span></div>
+        <h2>想到什麼就試什麼</h2>
+        <p class="sandbox-note">這一區的資料庫會保留你的異動（UPDATE / MERGE 的結果留得住），
+          想回到乾淨狀態就按「重設資料庫」。Oracle 專有語法都能用：MINUS、NVL、DECODE、MERGE、SYSDATE、DUAL⋯⋯</p>
+      </div>
+
+      <div class="card editor-card">
+        <div class="editor-head">
+          <span>SQL</span>
+          <span class="kbd-hint">Ctrl / ⌘ + Enter 執行；多段語句用分號隔開</span>
+        </div>
+        <div class="editor-wrap">
+          <div class="gutter" id="sandboxGutter">1</div>
+          <textarea id="sandboxInput" spellcheck="false" autocomplete="off" autocapitalize="off"
+                    placeholder="SELECT * FROM employees;"></textarea>
+        </div>
+        <div class="toolbar">
+          <button class="btn primary" id="btnSandboxRun">執行</button>
+          <button class="btn" id="btnSandboxReset">重設資料庫</button>
+          <button class="btn ghost" id="btnSandboxClear">清空</button>
+        </div>
+      </div>
+
+      <div id="sandboxFeedback" class="feedback" hidden></div>
+      <div id="sandboxResult"></div>
+    </section>
+
+  </main>
+
+  <aside class="side-right">
+    <div class="panel-tabs">
+      <button data-panel="schema" class="active">資料表</button>
+      <button data-panel="syntax">語法</button>
+      <button data-panel="dialect">方言對照</button>
+    </div>
+    <div class="panel" id="panelSchema"></div>
+    <div class="panel" id="panelSyntax" hidden></div>
+    <div class="panel" id="panelDialect" hidden></div>
+  </aside>
+
+</div>
+
+<footer>
+  全部運算都在你的瀏覽器裡完成，不會傳送任何資料到伺服器。
+  引擎為 <a href="https://sql.js.org" target="_blank" rel="noopener">sql.js</a>（SQLite / WebAssembly）加上一層 Oracle 方言轉換。
+  <br>原始碼：<a href="https://github.com/jie80219/oracle-sql-web" target="_blank" rel="noopener">github.com/jie80219/oracle-sql-web</a>
+</footer>
+
+<script src="vendor/sql-wasm.js"></script>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

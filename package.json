@@ -1,0 +1,20 @@
+{
+  "name": "oracle-sql-web",
+  "version": "1.0.0",
+  "main": "index.js",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "test": "node test/verify.mjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "Oracle SQL 線上練習場：單題與組合題，瀏覽器內即時執行與自動批改",
+  "devDependencies": {
+    "sql.js": "^1.13.0"
+  },
+  "type": "module",
+  "private": true
+}
