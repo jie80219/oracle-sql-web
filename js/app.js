@@ -4,6 +4,7 @@ import { TABLE_META } from './schema.js';
 import { DIALECT_NOTES, splitStatements } from './oracle.js';
 import { evaluate, runSql, solutionPreview } from './engine.js';
 import { loadEngine, getSQL, freshDatabase, getSandboxDatabase, resetSandboxDatabase } from './db.js';
+import { attachAutocomplete } from './autocomplete.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
@@ -491,6 +492,8 @@ async function init() {
 
   wireEditor('sqlInput', 'gutter', runCurrent);
   wireEditor('sandboxInput', 'sandboxGutter', runSandbox);
+  attachAutocomplete($('sqlInput'));
+  attachAutocomplete($('sandboxInput'));
 
   $('btnRun').onclick = runCurrent;
   $('btnCheck').onclick = checkCurrent;

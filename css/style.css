@@ -365,3 +365,32 @@ footer a { color: var(--accent-text); }
   .brand p { display: none; }
   .panel > * { flex: 1 1 100%; }
 }
+
+/* ── 編輯器輸入提示 ───────────────────────────────────────── */
+.ac-box {
+  position: fixed; z-index: 60;
+  min-width: 240px; max-width: 420px; max-height: 236px; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: 8px; box-shadow: var(--shadow); padding: 4px;
+}
+.ac-item {
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 5px 8px; border-radius: 6px; cursor: pointer;
+  font-size: 13px; white-space: nowrap;
+}
+.ac-item.active { background: var(--accent-soft); }
+.ac-item:hover { background: var(--surface-2); }
+.ac-item.active:hover { background: var(--accent-soft); }
+.ac-kind {
+  flex: none; font-size: 10.5px; font-weight: 600; letter-spacing: .02em;
+  padding: 1px 5px; border-radius: 4px; color: var(--text-muted); background: var(--code-bg);
+}
+.ac-資料表 { color: var(--accent-text); background: var(--accent-soft); }
+.ac-欄位 { color: var(--ok); background: var(--ok-soft); }
+.ac-函數 { color: var(--warn); background: var(--warn-soft); }
+.ac-text { font-family: var(--mono); font-weight: 550; color: var(--text); }
+.ac-meta {
+  margin-left: auto; padding-left: 10px;
+  font-size: 11.5px; color: var(--text-muted);
+  overflow: hidden; text-overflow: ellipsis;
+}
