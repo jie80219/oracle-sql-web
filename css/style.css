@@ -140,6 +140,7 @@ code, pre, textarea { font-family: var(--mono); }
 
 /* ── 版面 ───────────────────────────────────────────────── */
 
+.layout[hidden] { display: none; }
 .layout {
   display: grid;
   grid-template-columns: 252px minmax(0, 1fr) 312px;
@@ -312,6 +313,7 @@ table.result td.null { color: var(--text-muted); font-style: italic; opacity: .7
 .panel-tabs button { flex: 1; border: 0; background: transparent; color: var(--text-muted); padding: 6px 2px; border-radius: 6px; font-size: 12.5px; }
 .panel-tabs button.active { background: var(--surface); color: var(--text); box-shadow: var(--shadow); font-weight: 600; }
 
+.panel[hidden] { display: none; }
 .panel { display: flex; flex-direction: column; gap: 10px; }
 .panel-card { padding: 12px 14px; }
 .panel-card h4 { margin: 0 0 7px; font-size: 13px; display: flex; align-items: center; gap: 7px; }
