@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const initSqlJs = require('sql.js');
 
-import { ALL_ITEMS } from '../js/exercises.js';
+import { ALL_ITEMS, TOPICS, EXERCISES, COMBOS } from '../js/exercises.js';
 import { createDatabase, runSql, evaluate } from '../js/engine.js';
 import { translateOracleSql } from '../js/oracle.js';
 
@@ -149,6 +149,22 @@ check('子查詢與視窗函數裡的 ORDER BY 不受影響', () => {
 
 // ── 3. 每一題的參考答案 ─────────────────────────────────────────
 console.log(`\n[3] 題庫（共 ${ALL_ITEMS.length} 題）`);
+check('每題的 topicId 都有對應的主題，id 不重複', () => {
+  const topicIds = new Set(TOPICS.map((t) => t.id));
+  const orphans = EXERCISES.filter((e) => !topicIds.has(e.topicId)).map((e) => e.id);
+  assert(!orphans.length, `這些題目的 topicId 在 TOPICS 裡找不到（側欄會漏掉）：${orphans.join(', ')}`);
+
+  const comboOrphans = COMBOS.flatMap((c) => (c.topicIds || []).filter((t) => !topicIds.has(t)));
+  assert(!comboOrphans.length, `組合題引用了不存在的主題：${[...new Set(comboOrphans)].join(', ')}`);
+
+  const seen = new Set();
+  const dup = ALL_ITEMS.map((x) => x.id).filter((id) => (seen.has(id) ? true : (seen.add(id), false)));
+  assert(!dup.length, `題目 id 重複：${[...new Set(dup)].join(', ')}`);
+
+  const dupTopic = TOPICS.map((t) => t.id).filter((id, i, a) => a.indexOf(id) !== i);
+  assert(!dupTopic.length, `主題 id 重複：${[...new Set(dupTopic)].join(', ')}`);
+  return `${TOPICS.length} 個主題`;
+});
 for (const item of ALL_ITEMS) {
   check(`${item.id}｜${item.title}`, () => {
     // 3a. 參考答案自己要能通過批改

@@ -201,6 +201,298 @@ WHEN NOT MATCHED THEN
   INSERT (emp_id, bonus_amt, grade)
   VALUES (s.emp_id, s.bonus_amt, s.grade);`,
   },
+
+  // ── 分析函數（視窗函數）────────────────────────────────────
+  {
+    id: 'row-number', name: 'ROW_NUMBER', group: '分析函數',
+    summary: '依指定順序給每一列一個流水號。加上 PARTITION BY 就是「每組各自從 1 開始編」，是取「每組前 N 名」的標準做法。',
+    syntax: `SELECT emp_name, dept_id, salary,
+       ROW_NUMBER() OVER (PARTITION BY dept_id ORDER BY salary DESC) AS rn
+FROM   employees;
+
+-- 取每個部門薪水最高的那一位：先編號，再包一層在外面篩 rn = 1
+SELECT *
+FROM ( SELECT emp_name, dept_id, salary,
+              ROW_NUMBER() OVER (PARTITION BY dept_id ORDER BY salary DESC) AS rn
+       FROM   employees )
+WHERE  rn = 1;
+
+-- 注意：視窗函數不能直接寫在 WHERE 裡，一定要包一層子查詢`,
+  },
+  {
+    id: 'rank', name: 'RANK / DENSE_RANK', group: '分析函數',
+    summary: '兩個都是排名，差別在並列之後會不會跳號：RANK 會跳、DENSE_RANK 不會。',
+    syntax: `SELECT emp_name, salary,
+       RANK()       OVER (ORDER BY salary DESC) AS rk,
+       DENSE_RANK() OVER (ORDER BY salary DESC) AS drk,
+       ROW_NUMBER() OVER (ORDER BY salary DESC) AS rn
+FROM   employees;
+
+-- 三個人並列第 1 時：
+--   RANK       → 1, 1, 1, 4
+--   DENSE_RANK → 1, 1, 1, 2
+--   ROW_NUMBER → 1, 2, 3, 4（一定不重複）`,
+  },
+  {
+    id: 'window-agg', name: '彙總開窗 OVER', group: '分析函數',
+    summary: 'COUNT / SUM / AVG 後面接 OVER，資料就不會被併成一列，而是「每一列都帶著那一組的統計值」。',
+    syntax: `-- 每一列都帶自己部門的平均薪資，筆數不變
+SELECT emp_name, dept_id, salary,
+       AVG(salary) OVER (PARTITION BY dept_id) AS dept_avg
+FROM   employees;
+
+-- 累計加總：加上 ORDER BY 就變成「到目前這一列為止」
+SELECT emp_id, salary,
+       SUM(salary) OVER (ORDER BY emp_id
+                         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running
+FROM   employees;
+
+-- OVER () 留空就是「整份資料」，常拿來算佔比
+SELECT emp_name, salary * 100.0 / SUM(salary) OVER () AS pct FROM employees;`,
+  },
+  {
+    id: 'lag-lead', name: 'LAG / LEAD', group: '分析函數',
+    summary: '直接讀「上一列」或「下一列」的值，算差額、比較前後期都靠它，不用自我連接。',
+    syntax: `SELECT emp_name, hire_date,
+       LAG(hire_date)  OVER (ORDER BY hire_date) AS prev_hire,
+       LEAD(hire_date) OVER (ORDER BY hire_date) AS next_hire
+FROM   employees;
+
+-- 第二個參數是往前／往後幾列，第三個是沒有值時的替代值
+LAG(salary, 1, 0) OVER (PARTITION BY dept_id ORDER BY salary DESC)`,
+  },
+  {
+    id: 'ntile-firstlast', name: 'NTILE / FIRST_VALUE', group: '分析函數',
+    summary: 'NTILE 把資料平均切成 n 份（分位數），FIRST_VALUE / LAST_VALUE 抓視窗裡的頭尾那一列。',
+    syntax: `-- 依薪資把全體切成 4 組，1 是最低的那一組
+SELECT emp_name, salary, NTILE(4) OVER (ORDER BY salary) AS quartile FROM employees;
+
+-- 每一列都帶出「自己部門薪水最高的人是誰」
+SELECT emp_name, dept_id,
+       FIRST_VALUE(emp_name) OVER (PARTITION BY dept_id ORDER BY salary DESC) AS top_earner
+FROM   employees;
+
+-- LAST_VALUE 預設的視窗只看到「目前這一列為止」，要自己把範圍開到底
+LAST_VALUE(emp_name) OVER (PARTITION BY dept_id ORDER BY salary DESC
+                           ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)`,
+  },
+
+  // ── 進階查詢 ─────────────────────────────────────────────
+  {
+    id: 'with-cte', name: 'WITH（CTE）', group: '進階查詢',
+    summary: '把子查詢先取名放在最前面，後面就能像一張表一樣重複使用，長查詢會好讀非常多。',
+    syntax: `WITH dept_avg AS (
+  SELECT dept_id, AVG(salary) AS avg_sal
+  FROM   employees
+  GROUP  BY dept_id
+)
+SELECT e.emp_name, e.salary, d.avg_sal
+FROM   employees e
+JOIN   dept_avg d ON d.dept_id = e.dept_id
+WHERE  e.salary > d.avg_sal;
+
+-- 可以一次定義多個，用逗號隔開，後面的能引用前面的
+WITH a AS ( SELECT ... ),
+     b AS ( SELECT * FROM a WHERE ... )
+SELECT * FROM b;`,
+  },
+  {
+    id: 'hierarchy', name: 'CONNECT BY 階層查詢', group: '進階查詢',
+    summary: 'Oracle 專屬的樹狀展開：START WITH 指定起點、CONNECT BY PRIOR 指定「誰接在誰下面」，LEVEL 是目前層數。',
+    syntax: `SELECT LEVEL, emp_id, emp_name, manager_id
+FROM   employees
+START WITH manager_id IS NULL          -- 從沒有主管的人開始
+CONNECT BY PRIOR emp_id = manager_id   -- 上一層的 emp_id = 這一層的 manager_id
+ORDER  BY LEVEL, emp_id;
+
+-- SYS_CONNECT_BY_PATH 會把一路走下來的值串成路徑
+SELECT LEVEL, SYS_CONNECT_BY_PATH(emp_name, '/') AS path
+FROM   employees
+START WITH emp_id = 1003
+CONNECT BY PRIOR emp_id = manager_id;
+
+-- 本站把它改寫成 WITH RECURSIVE 執行，單表階層查詢可用；
+-- ORDER SIBLINGS BY 會退化成一般 ORDER BY，層數上限 100 層。`,
+  },
+  {
+    id: 'inline-view', name: '內嵌視圖 / 純量子查詢', group: '進階查詢',
+    summary: '子查詢可以放在 FROM 裡當一張暫時的表（內嵌視圖），也可以放在 SELECT 裡當一個值（純量子查詢）。',
+    syntax: `-- 內嵌視圖：先聚合，再對聚合結果篩選
+SELECT *
+FROM ( SELECT dept_id, COUNT(*) AS cnt FROM employees GROUP BY dept_id )
+WHERE  cnt >= 3;
+
+-- 純量子查詢：放在 SELECT 裡，只能回傳「一列一欄」，否則會報錯
+SELECT e.emp_name,
+       (SELECT d.dept_name FROM departments d WHERE d.dept_id = e.dept_id) AS dept_name
+FROM   employees e;`,
+  },
+  {
+    id: 'correlated', name: '關聯子查詢', group: '進階查詢',
+    summary: '子查詢裡引用到外層的欄位，就變成「外層每跑一列、裡面就重算一次」。EXISTS 幾乎都是這樣用的。',
+    syntax: `-- 找出薪水高於「自己部門平均」的員工
+SELECT e.emp_name, e.salary
+FROM   employees e
+WHERE  e.salary > ( SELECT AVG(x.salary)
+                    FROM   employees x
+                    WHERE  x.dept_id = e.dept_id );  -- 這行引用了外層的 e，就是關聯
+
+-- 關聯子查詢也可以放在 SELECT 裡當計數器
+SELECT e.emp_name,
+       (SELECT COUNT(*) FROM emp_projects p WHERE p.emp_id = e.emp_id) AS proj_cnt
+FROM   employees e;`,
+  },
+  {
+    id: 'any-all', name: 'ANY / ALL', group: '進階查詢',
+    summary: '拿一個值去跟子查詢回傳的「一整組值」比較。ALL 是「全部都要成立」，ANY 是「有一個成立就算」。',
+    syntax: `-- 薪水比業務部（10）每一個人都高
+SELECT emp_name FROM employees
+WHERE  salary > ALL (SELECT salary FROM employees WHERE dept_id = 10);
+
+-- 薪水只要比研發部（20）隨便哪一個人高就算
+SELECT emp_name FROM employees
+WHERE  salary > ANY (SELECT salary FROM employees WHERE dept_id = 20);
+
+-- = ANY 等同 IN，<> ALL 等同 NOT IN（SOME 是 ANY 的同義字）`,
+  },
+  {
+    id: 'self-join', name: '自我連接', group: '進階查詢',
+    summary: '同一張表 JOIN 自己，用不同別名當分身。最常見的就是「員工對主管」。',
+    syntax: `SELECT e.emp_name AS 員工, m.emp_name AS 主管
+FROM   employees e
+LEFT   JOIN employees m ON m.emp_id = e.manager_id;
+
+-- 找同一位主管底下的同事配對，用 a.emp_id < b.emp_id 避免重複與自己配自己
+SELECT a.emp_name, b.emp_name
+FROM   employees a
+JOIN   employees b ON b.manager_id = a.manager_id AND a.emp_id < b.emp_id;`,
+  },
+  {
+    id: 'cross-nonequi', name: 'CROSS JOIN / 非等值連接', group: '進階查詢',
+    summary: 'CROSS JOIN 產生所有組合（笛卡兒積）；非等值連接是 ON 裡面不用 =，最常見是拿 BETWEEN 去對級距表。',
+    syntax: `-- 非等值連接：把薪水對到級距（salary_grades 上沒有外鍵）
+SELECT e.emp_name, e.salary, g.grade
+FROM   employees e
+JOIN   salary_grades g ON e.salary BETWEEN g.min_sal AND g.max_sal;
+
+-- CROSS JOIN：5 個部門 × 4 個級距 = 20 種組合
+SELECT d.dept_name, g.grade
+FROM   departments d CROSS JOIN salary_grades g;`,
+  },
+
+  // ── 查詢基礎（補充）──────────────────────────────────────
+  {
+    id: 'like-between', name: 'LIKE / BETWEEN / IS NULL', group: '查詢基礎',
+    summary: '模糊比對用 LIKE（% 任意長度、_ 剛好一個字），範圍用 BETWEEN（含頭含尾），NULL 只能用 IS NULL 判斷。',
+    syntax: `SELECT * FROM employees WHERE job LIKE '%MGR';       -- 結尾是 MGR
+SELECT * FROM employees WHERE emp_name LIKE '王_';    -- 王 + 剛好一個字
+SELECT * FROM employees WHERE salary BETWEEN 50000 AND 80000;  -- 含 50000 與 80000
+SELECT * FROM employees WHERE email IS NULL;          -- = NULL 永遠不成立，一定要用 IS NULL`,
+  },
+  {
+    id: 'top-n', name: 'Top-N 與分頁', group: '查詢基礎',
+    summary: 'Oracle 12c 之後用 FETCH FIRST n ROWS ONLY，分頁再加 OFFSET；12c 之前只能用 ROWNUM 包一層子查詢。',
+    syntax: `-- 12c 之後的寫法
+SELECT emp_name, salary FROM employees
+ORDER  BY salary DESC
+FETCH  FIRST 3 ROWS ONLY;
+
+-- 分頁：跳過 3 筆再取 3 筆
+SELECT emp_name, salary FROM employees
+ORDER  BY salary DESC
+OFFSET 3 ROWS FETCH NEXT 3 ROWS ONLY;
+
+-- 舊寫法：ROWNUM 是「取出來才編號」，必須排序完才篩，所以要包一層
+SELECT * FROM ( SELECT emp_name, salary FROM employees ORDER BY salary DESC )
+WHERE  ROWNUM <= 3;`,
+  },
+  {
+    id: 'order-null', name: 'ORDER BY 與 NULL 排序', group: '查詢基礎',
+    summary: 'Oracle 預設 ASC 時 NULL 排最後、DESC 時 NULL 排最前，可以用 NULLS FIRST / NULLS LAST 自己指定。',
+    syntax: `SELECT emp_name, commission_pct FROM employees ORDER BY commission_pct;        -- NULL 在最後
+SELECT emp_name, commission_pct FROM employees ORDER BY commission_pct DESC;   -- NULL 在最前
+SELECT emp_name, commission_pct FROM employees ORDER BY commission_pct NULLS FIRST;
+
+-- 也可以用別名或欄位序號排序
+SELECT dept_id, COUNT(*) AS cnt FROM employees GROUP BY dept_id ORDER BY cnt DESC, 1;`,
+  },
+
+  // ── 函數 ────────────────────────────────────────────────
+  {
+    id: 'string-func', name: '字串函數', group: '函數',
+    summary: '串接用 ||，切字串 SUBSTR、找位置 INSTR、補齊 LPAD / RPAD、大小寫 UPPER / LOWER / INITCAP、長度 LENGTH、替換 REPLACE。',
+    syntax: `SELECT emp_name || '（' || job || '）'      AS label,
+       SUBSTR(emp_name, 1, 1)               AS 姓,
+       INSTR(email, '@')                    AS at_pos,
+       UPPER(job), LOWER(job), INITCAP(job),
+       LENGTH(emp_name)                     AS 字數,
+       LPAD(emp_id, 8, '0')                 AS padded,
+       REPLACE(email, '@example.com', '')   AS account,
+       TRIM(emp_name)
+FROM   employees;`,
+  },
+  {
+    id: 'date-func', name: '日期函數', group: '函數',
+    summary: 'TO_CHAR 轉字串、EXTRACT 抓年月日、MONTHS_BETWEEN 算月數差、ADD_MONTHS 加月、LAST_DAY 取月底、TRUNC 砍到月初。',
+    syntax: `SELECT hire_date,
+       TO_CHAR(hire_date, 'YYYY-MM')              AS ym,
+       EXTRACT(YEAR  FROM hire_date)              AS y,
+       EXTRACT(MONTH FROM hire_date)              AS m,
+       ROUND(MONTHS_BETWEEN(SYSDATE, hire_date))  AS 年資月數,
+       ADD_MONTHS(hire_date, 3)                   AS 三個月後,
+       LAST_DAY(hire_date)                        AS 當月月底,
+       TRUNC(hire_date, 'MM')                     AS 當月月初
+FROM   employees;
+
+-- 本站的 SYSDATE 固定在 2024-09-30，答案才不會隔天就變`,
+  },
+  {
+    id: 'number-func', name: '數值函數', group: '函數',
+    summary: 'ROUND 四捨五入、TRUNC 直接砍掉、MOD 取餘數、CEIL / FLOOR 進位與捨去、ABS 絕對值、POWER / SQRT。',
+    syntax: `SELECT ROUND(1234.567, 1)   AS a,   -- 1234.6
+       TRUNC(1234.567, 1)   AS b,   -- 1234.5（不四捨五入）
+       TRUNC(1234567, -3)   AS c,   -- 1234000（負數是砍整數位）
+       MOD(10, 3)           AS d,   -- 1
+       CEIL(1.2), FLOOR(1.8), ABS(-5), POWER(2, 10), SQRT(16)
+FROM   dual;`,
+  },
+  {
+    id: 'listagg', name: 'LISTAGG', group: '函數',
+    summary: '把同一組的多列值串成一個字串，做「部門成員名單」這種輸出最好用。',
+    syntax: `SELECT dept_id,
+       LISTAGG(emp_name, '、') WITHIN GROUP (ORDER BY emp_id) AS members
+FROM   employees
+GROUP  BY dept_id;
+
+-- WITHIN GROUP (ORDER BY ...) 決定串起來的順序，不能省`,
+  },
+  {
+    id: 'coalesce', name: 'COALESCE / NULLIF', group: '函數',
+    summary: 'COALESCE 回傳第一個不是 NULL 的值（參數可以很多個，NVL 只能兩個）；NULLIF 在兩值相等時回 NULL。',
+    syntax: `SELECT COALESCE(email, phone, '（未提供）') AS contact FROM ...;
+
+-- NULLIF 最常拿來擋除以零：分母是 0 就變成 NULL，整個算式回 NULL 而不是報錯
+SELECT total / NULLIF(head_count, 0) AS per_head FROM ...;`,
+  },
+
+  // ── DML（補充）──────────────────────────────────────────
+  {
+    id: 'insert-delete', name: 'INSERT / DELETE', group: 'DML',
+    summary: 'INSERT 可以直接給值，也可以 INSERT … SELECT 把一整段查詢的結果灌進去；DELETE 永遠記得先寫 WHERE。',
+    syntax: `INSERT INTO emp_bonus (emp_id, bonus_amt, grade, updated_at)
+VALUES (1010, 3000, 'C', '2024-09-30');
+
+-- 從查詢結果批次新增
+INSERT INTO emp_bonus (emp_id, bonus_amt, grade, updated_at)
+SELECT e.emp_id, e.salary * g.bonus_rate, g.grade, '2024-09-30'
+FROM   employees e
+JOIN   salary_grades g ON e.salary BETWEEN g.min_sal AND g.max_sal
+WHERE  e.emp_id NOT IN (SELECT emp_id FROM emp_bonus);
+
+-- 刪掉在另一張表對不到的孤兒資料
+DELETE FROM salary_adjust
+WHERE  NOT EXISTS (SELECT 1 FROM employees e WHERE e.emp_id = salary_adjust.emp_id);`,
+  },
 ];
 
 export const EXERCISES = [
@@ -698,6 +990,621 @@ WHEN MATCHED THEN
   UPDATE SET e.salary = a.new_salary
   WHERE  a.new_salary > e.salary`,
   },
+
+  // ── ROW_NUMBER ──────────────────────────────────────────────
+  {
+    id: 'row-number-1', topicId: 'row-number', difficulty: 1,
+    title: '全公司薪資流水號',
+    prompt: '列出所有員工的 emp_name、salary，以及依 salary 由高到低編出來的流水號 rn。薪水相同時再依 emp_id 由小到大。依 rn 排序。',
+    hint: 'ROW_NUMBER() OVER (ORDER BY ...)。括號裡的 ORDER BY 決定編號順序，跟最外層的 ORDER BY 是兩回事。',
+    requires: ['ROW_NUMBER', 'OVER'], ordered: true,
+    solution: `SELECT emp_name, salary,
+       ROW_NUMBER() OVER (ORDER BY salary DESC, emp_id) AS rn
+FROM   employees
+ORDER  BY rn`,
+  },
+  {
+    id: 'row-number-2', topicId: 'row-number', difficulty: 2,
+    title: '每個部門薪水最高的人',
+    prompt: '找出每個部門薪水最高的那一位員工，顯示 dept_id、emp_name、salary。沒有部門的員工不算。依 dept_id 排序。',
+    hint: '視窗函數不能寫在 WHERE 裡。先用 ROW_NUMBER() OVER (PARTITION BY dept_id ORDER BY salary DESC) 編號，把整段包成 FROM 裡的子查詢，外層再篩 rn = 1。',
+    requires: ['ROW_NUMBER', 'PARTITION BY'], ordered: true,
+    solution: `SELECT dept_id, emp_name, salary
+FROM ( SELECT dept_id, emp_name, salary,
+              ROW_NUMBER() OVER (PARTITION BY dept_id ORDER BY salary DESC) AS rn
+       FROM   employees
+       WHERE  dept_id IS NOT NULL )
+WHERE  rn = 1
+ORDER  BY dept_id`,
+  },
+  {
+    id: 'row-number-3', topicId: 'row-number', difficulty: 3,
+    title: '每個專案的工時前兩名',
+    prompt: '每個專案列出投入工時 hours 最多的前兩名，顯示 proj_id、emp_name、hours。工時相同時 emp_id 小的優先。依 proj_id、hours 由大到小排序。',
+    hint: 'PARTITION BY proj_id 分組編號，外層篩 rn <= 2。emp_name 要從 employees 接過來，JOIN 可以放在子查詢裡。',
+    requires: ['ROW_NUMBER', 'PARTITION BY'], ordered: true,
+    solution: `SELECT proj_id, emp_name, hours
+FROM ( SELECT ep.proj_id, e.emp_name, ep.hours,
+              ROW_NUMBER() OVER (PARTITION BY ep.proj_id
+                                 ORDER BY ep.hours DESC, ep.emp_id) AS rn
+       FROM   emp_projects ep
+       JOIN   employees e ON e.emp_id = ep.emp_id )
+WHERE  rn <= 2
+ORDER  BY proj_id, hours DESC`,
+  },
+
+  // ── RANK / DENSE_RANK ───────────────────────────────────────
+  {
+    id: 'rank-1', topicId: 'rank', difficulty: 2,
+    title: '看出 RANK 與 DENSE_RANK 的差別',
+    prompt: '依 job 分組算出人數 cnt，再用 RANK 與 DENSE_RANK 各給一個「人數由多到少」的排名，顯示 job、cnt、rk、drk。依 cnt 由大到小、job 排序。',
+    hint: '視窗函數可以直接對聚合結果開窗：RANK() OVER (ORDER BY COUNT(*) DESC)。兩個人數並列時，RANK 下一名會跳號、DENSE_RANK 不會，跑出來對照一下就懂了。',
+    requires: ['RANK', 'DENSE_RANK'], ordered: true,
+    solution: `SELECT job, COUNT(*) AS cnt,
+       RANK()       OVER (ORDER BY COUNT(*) DESC) AS rk,
+       DENSE_RANK() OVER (ORDER BY COUNT(*) DESC) AS drk
+FROM   employees
+GROUP  BY job
+ORDER  BY cnt DESC, job`,
+  },
+  {
+    id: 'rank-2', topicId: 'rank', difficulty: 2,
+    title: '部門內的薪資名次',
+    prompt: '列出每位有部門的員工的 dept_id、emp_name、salary，以及他在自己部門內薪資由高到低的 DENSE_RANK 名次 drk。依 dept_id、drk、emp_name 排序。',
+    hint: 'PARTITION BY dept_id 讓名次在每個部門內各自從 1 開始。',
+    requires: ['DENSE_RANK', 'PARTITION BY'], ordered: true,
+    solution: `SELECT dept_id, emp_name, salary,
+       DENSE_RANK() OVER (PARTITION BY dept_id ORDER BY salary DESC) AS drk
+FROM   employees
+WHERE  dept_id IS NOT NULL
+ORDER  BY dept_id, drk, emp_name`,
+  },
+  {
+    id: 'rank-3', topicId: 'rank', difficulty: 3,
+    title: '全公司薪資第二高',
+    prompt: '找出全公司薪資「第二高」的員工，只輸出 emp_name、salary。薪水相同視為同一名次，所以請用 DENSE_RANK 完成。',
+    hint: '先算出 DENSE_RANK 名次，包一層之後篩 drk = 2。用 MAX 硬湊會在有並列時出錯。',
+    requires: ['DENSE_RANK'],
+    solution: `SELECT emp_name, salary
+FROM ( SELECT emp_name, salary,
+              DENSE_RANK() OVER (ORDER BY salary DESC) AS drk
+       FROM   employees )
+WHERE  drk = 2`,
+  },
+
+  // ── 彙總開窗 ────────────────────────────────────────────────
+  {
+    id: 'window-agg-1', topicId: 'window-agg', difficulty: 2,
+    title: '跟部門平均比一比',
+    prompt: '列出有部門的員工 emp_name、dept_id、salary，以及所屬部門的平均薪資 dept_avg（四捨五入到整數），還有 salary 減掉 dept_avg 的差額 diff。依 dept_id、emp_name 排序。',
+    hint: 'AVG(salary) OVER (PARTITION BY dept_id)。不用 GROUP BY，筆數不會被併掉，每一列都會帶著自己部門的平均。',
+    requires: ['OVER', 'PARTITION BY'], ordered: true,
+    solution: `SELECT emp_name, dept_id, salary,
+       ROUND(AVG(salary) OVER (PARTITION BY dept_id), 0) AS dept_avg,
+       salary - ROUND(AVG(salary) OVER (PARTITION BY dept_id), 0) AS diff
+FROM   employees
+WHERE  dept_id IS NOT NULL
+ORDER  BY dept_id, emp_name`,
+  },
+  {
+    id: 'window-agg-2', topicId: 'window-agg', difficulty: 2,
+    title: '薪資累計',
+    prompt: '依 emp_id 由小到大列出 emp_id、emp_name、salary，以及「到這一列為止的薪資累計」running_total。依 emp_id 排序。',
+    hint: 'SUM(salary) OVER (ORDER BY emp_id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)。OVER 裡面有了 ORDER BY，加總就從「整組」變成「到目前為止」。',
+    requires: ['OVER'], ordered: true,
+    solution: `SELECT emp_id, emp_name, salary,
+       SUM(salary) OVER (ORDER BY emp_id
+                         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_total
+FROM   employees
+ORDER  BY emp_id`,
+  },
+  {
+    id: 'window-agg-3', topicId: 'window-agg', difficulty: 3,
+    title: '部門內的薪資佔比',
+    prompt: '列出每位有部門的員工 emp_name、dept_id、salary，以及他的薪水佔「自己部門薪資總和」的百分比 pct（四捨五入到小數第 1 位）。依 dept_id、pct 由大到小排序。',
+    hint: 'salary * 100.0 / SUM(salary) OVER (PARTITION BY dept_id)。乘 100.0 而不是 100，才不會被當成整數相除。',
+    requires: ['OVER', 'PARTITION BY', 'SUM'], ordered: true,
+    solution: `SELECT emp_name, dept_id, salary,
+       ROUND(salary * 100.0 / SUM(salary) OVER (PARTITION BY dept_id), 1) AS pct
+FROM   employees
+WHERE  dept_id IS NOT NULL
+ORDER  BY dept_id, pct DESC`,
+  },
+
+  // ── LAG / LEAD ──────────────────────────────────────────────
+  {
+    id: 'lag-lead-1', topicId: 'lag-lead', difficulty: 2,
+    title: '前一位到職的人是誰',
+    prompt: '依 hire_date 由早到晚列出 emp_name、hire_date，以及「前一位到職者的姓名」prev_name。第一筆沒有前一位，留 NULL。依 hire_date 排序。',
+    hint: 'LAG(emp_name) OVER (ORDER BY hire_date)。LAG 讀上一列、LEAD 讀下一列。',
+    requires: ['LAG', 'OVER'], ordered: true,
+    solution: `SELECT emp_name, hire_date,
+       LAG(emp_name) OVER (ORDER BY hire_date) AS prev_name
+FROM   employees
+ORDER  BY hire_date`,
+  },
+  {
+    id: 'lag-lead-2', topicId: 'lag-lead', difficulty: 3,
+    title: '部門內的薪資落差',
+    prompt: '在每個部門內依 salary 由高到低排，列出 dept_id、emp_name、salary，以及「比他高一名的那個人的薪水」upper_salary；自己就是最高的話補 0。沒有部門的員工不算。依 dept_id、salary 由大到小排序。',
+    hint: 'LAG 的第三個參數就是「沒有上一列時要回傳什麼」：LAG(salary, 1, 0)。',
+    requires: ['LAG', 'PARTITION BY'], ordered: true,
+    solution: `SELECT dept_id, emp_name, salary,
+       LAG(salary, 1, 0) OVER (PARTITION BY dept_id ORDER BY salary DESC) AS upper_salary
+FROM   employees
+WHERE  dept_id IS NOT NULL
+ORDER  BY dept_id, salary DESC`,
+  },
+
+  // ── NTILE / FIRST_VALUE ─────────────────────────────────────
+  {
+    id: 'ntile-firstlast-1', topicId: 'ntile-firstlast', difficulty: 2,
+    title: '薪資四分位',
+    prompt: '依 salary 由低到高把 12 位員工切成 4 組，列出 emp_name、salary 與組別 quartile。薪水相同時依 emp_id 排。依 salary、emp_id 排序。',
+    hint: 'NTILE(4) OVER (ORDER BY salary, emp_id)。12 筆平均切 4 組，每組剛好 3 個人。',
+    requires: ['NTILE'], ordered: true,
+    solution: `SELECT emp_name, salary,
+       NTILE(4) OVER (ORDER BY salary, emp_id) AS quartile
+FROM   employees
+ORDER  BY salary, emp_id`,
+  },
+  {
+    id: 'ntile-firstlast-2', topicId: 'ntile-firstlast', difficulty: 3,
+    title: '部門薪資的頭與尾',
+    prompt: '列出有部門的員工 dept_id、emp_name、salary，並帶出他所在部門「薪水最高的人的姓名」top_name 與「薪水最低的人的姓名」low_name。同薪時取 emp_id 小的。依 dept_id、emp_name 排序。',
+    hint: 'LAST_VALUE 預設的視窗只到目前這一列，所以拿不到真正的最後一名，要自己補上 ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING。',
+    requires: ['FIRST_VALUE', 'LAST_VALUE'], ordered: true,
+    solution: `SELECT dept_id, emp_name, salary,
+       FIRST_VALUE(emp_name) OVER (PARTITION BY dept_id ORDER BY salary DESC, emp_id) AS top_name,
+       LAST_VALUE(emp_name)  OVER (PARTITION BY dept_id ORDER BY salary DESC, emp_id
+                                   ROWS BETWEEN UNBOUNDED PRECEDING
+                                            AND UNBOUNDED FOLLOWING) AS low_name
+FROM   employees
+WHERE  dept_id IS NOT NULL
+ORDER  BY dept_id, emp_name`,
+  },
+
+  // ── WITH（CTE）──────────────────────────────────────────────
+  {
+    id: 'with-cte-1', topicId: 'with-cte', difficulty: 2,
+    title: '薪水高於部門平均的人',
+    prompt: '用 WITH 先算出每個部門的平均薪資，再找出薪水高於自己部門平均的員工，顯示 emp_name、dept_id、salary，以及部門平均 avg_sal（四捨五入到整數）。沒有部門的員工不算。依 dept_id、emp_name 排序。',
+    hint: 'WITH dept_avg AS ( SELECT dept_id, AVG(salary) AS avg_sal ... GROUP BY dept_id ) 之後，dept_avg 就能當成一張表拿來 JOIN。',
+    requires: ['WITH'], ordered: true,
+    solution: `WITH dept_avg AS (
+  SELECT dept_id, AVG(salary) AS avg_sal
+  FROM   employees
+  WHERE  dept_id IS NOT NULL
+  GROUP  BY dept_id
+)
+SELECT e.emp_name, e.dept_id, e.salary, ROUND(a.avg_sal, 0) AS avg_sal
+FROM   employees e
+JOIN   dept_avg a ON a.dept_id = e.dept_id
+WHERE  e.salary > a.avg_sal
+ORDER  BY e.dept_id, e.emp_name`,
+  },
+  {
+    id: 'with-cte-2', topicId: 'with-cte', difficulty: 3,
+    title: '兩段 WITH 串起來',
+    prompt: '用兩段 WITH 完成：一段算每個部門的專案預算總和 total_budget，一段算每個部門的人數 head_count；最後列出 dept_name、head_count、total_budget、以及平均每人分到的預算 budget_per_head（四捨五入到整數）。只看「既有專案也有員工」的部門，依 dept_name 排序。',
+    hint: 'WITH a AS ( ... ), b AS ( ... ) 用逗號接第二段，不用再寫一次 WITH。最後把兩段跟 departments 一起 JOIN，INNER JOIN 自然會把缺任一邊的部門濾掉。',
+    requires: ['WITH'], ordered: true,
+    solution: `WITH proj_sum AS (
+  SELECT dept_id, SUM(budget) AS total_budget
+  FROM   projects
+  WHERE  dept_id IS NOT NULL
+  GROUP  BY dept_id
+), emp_cnt AS (
+  SELECT dept_id, COUNT(*) AS head_count
+  FROM   employees
+  WHERE  dept_id IS NOT NULL
+  GROUP  BY dept_id
+)
+SELECT d.dept_name, c.head_count, p.total_budget,
+       ROUND(p.total_budget * 1.0 / c.head_count, 0) AS budget_per_head
+FROM   departments d
+JOIN   proj_sum p ON p.dept_id = d.dept_id
+JOIN   emp_cnt  c ON c.dept_id = d.dept_id
+ORDER  BY d.dept_name`,
+  },
+
+  // ── 階層查詢 ────────────────────────────────────────────────
+  {
+    id: 'hierarchy-1', topicId: 'hierarchy', difficulty: 2,
+    title: '把組織圖展開',
+    prompt: '從沒有主管的人開始，把整個組織往下展開，列出層數 LEVEL、emp_id、emp_name。依 LEVEL、emp_id 排序。',
+    hint: 'START WITH manager_id IS NULL 指定起點，CONNECT BY PRIOR emp_id = manager_id 表示「上一層的 emp_id 等於這一層的 manager_id」。PRIOR 加在哪一邊決定往下還是往上走。',
+    requires: ['CONNECT BY', 'START WITH'], ordered: true,
+    solution: `SELECT LEVEL, emp_id, emp_name
+FROM   employees
+START WITH manager_id IS NULL
+CONNECT BY PRIOR emp_id = manager_id
+ORDER  BY LEVEL, emp_id`,
+  },
+  {
+    id: 'hierarchy-2', topicId: 'hierarchy', difficulty: 3,
+    title: '某位主管往下的路徑',
+    prompt: "以 emp_id = 1003 為起點往下展開，列出 LEVEL、emp_name，以及從 1003 一路串下來的路徑 path（用 SYS_CONNECT_BY_PATH 搭配 '/' 分隔）。依 path 排序。",
+    hint: "SYS_CONNECT_BY_PATH(emp_name, '/') 會把沿路走過的值接起來，每一段前面都會補上分隔符號。",
+    requires: ['CONNECT BY', 'SYS_CONNECT_BY_PATH'], ordered: true,
+    solution: `SELECT LEVEL, emp_name, SYS_CONNECT_BY_PATH(emp_name, '/') AS path
+FROM   employees
+START WITH emp_id = 1003
+CONNECT BY PRIOR emp_id = manager_id
+ORDER  BY path`,
+  },
+
+  // ── 內嵌視圖 / 純量子查詢 ───────────────────────────────────
+  {
+    id: 'inline-view-1', topicId: 'inline-view', difficulty: 2,
+    title: '人數三人以上的部門',
+    prompt: '找出員工人數 3 人（含）以上的部門，顯示 dept_id、cnt，依 dept_id 排序。沒有部門的員工不算。這一題請用內嵌視圖（把聚合查詢放進 FROM 裡再篩），不要用 HAVING。',
+    hint: 'FROM ( SELECT dept_id, COUNT(*) AS cnt ... GROUP BY dept_id ) 之後，cnt 就是一個普通欄位，外層直接 WHERE cnt >= 3 就好。',
+    requires: ['GROUP BY'], forbids: ['HAVING'], ordered: true,
+    solution: `SELECT dept_id, cnt
+FROM ( SELECT dept_id, COUNT(*) AS cnt
+       FROM   employees
+       WHERE  dept_id IS NOT NULL
+       GROUP  BY dept_id )
+WHERE  cnt >= 3
+ORDER  BY dept_id`,
+  },
+  {
+    id: 'inline-view-2', topicId: 'inline-view', difficulty: 2,
+    title: '用純量子查詢帶出部門名',
+    prompt: '列出每位員工的 emp_name 與部門名稱 dept_name，沒有部門的人 dept_name 留 NULL。這一題不准用 JOIN，請把 departments 的查詢寫成 SELECT 裡的純量子查詢。依 emp_id 排序。',
+    hint: '純量子查詢放在 SELECT 清單裡，只能回傳一列一欄；對不到資料時它會自己回傳 NULL，效果就跟 LEFT JOIN 一樣。',
+    forbids: ['JOIN'], ordered: true,
+    solution: `SELECT e.emp_name,
+       (SELECT d.dept_name FROM departments d WHERE d.dept_id = e.dept_id) AS dept_name
+FROM   employees e
+ORDER  BY e.emp_id`,
+  },
+
+  // ── 關聯子查詢 ──────────────────────────────────────────────
+  {
+    id: 'correlated-1', topicId: 'correlated', difficulty: 3,
+    title: '薪水高於自己部門平均',
+    prompt: '用關聯子查詢找出薪水高於自己部門平均的員工，顯示 emp_name、dept_id、salary。沒有部門的員工不算。這一題不准用 JOIN。依 dept_id、emp_name 排序。',
+    hint: 'WHERE e.salary > (SELECT AVG(x.salary) FROM employees x WHERE x.dept_id = e.dept_id)。子查詢裡引用外層的 e.dept_id，就會對每一列各算一次。',
+    forbids: ['JOIN'], ordered: true,
+    solution: `SELECT e.emp_name, e.dept_id, e.salary
+FROM   employees e
+WHERE  e.dept_id IS NOT NULL
+AND    e.salary > ( SELECT AVG(x.salary)
+                    FROM   employees x
+                    WHERE  x.dept_id = e.dept_id )
+ORDER  BY e.dept_id, e.emp_name`,
+  },
+  {
+    id: 'correlated-2', topicId: 'correlated', difficulty: 2,
+    title: '每個人參與幾個專案',
+    prompt: '列出每位員工的 emp_name 以及他參與的專案數 proj_cnt，沒參與的顯示 0。這一題不准用 JOIN 也不准用 GROUP BY，請把計數寫成 SELECT 裡的關聯子查詢。依 emp_id 排序。',
+    hint: '(SELECT COUNT(*) FROM emp_projects p WHERE p.emp_id = e.emp_id)。COUNT 在沒有列時本來就回 0，不用補 NVL。',
+    forbids: ['JOIN', 'GROUP BY'], ordered: true,
+    solution: `SELECT e.emp_name,
+       ( SELECT COUNT(*) FROM emp_projects p WHERE p.emp_id = e.emp_id ) AS proj_cnt
+FROM   employees e
+ORDER  BY e.emp_id`,
+  },
+
+  // ── ANY / ALL ───────────────────────────────────────────────
+  {
+    id: 'any-all-1', topicId: 'any-all', difficulty: 2,
+    title: '比業務部所有人都高薪',
+    prompt: '找出薪水比業務部（dept_id = 10）每一位員工都高的員工，顯示 emp_name、salary，依 salary 由大到小排序。請用 ALL 完成。',
+    hint: 'salary > ALL (子查詢)：要比子查詢回傳的每一個值都大，等價於「大於其中的最大值」。',
+    requires: ['ALL'], ordered: true,
+    solution: `SELECT emp_name, salary
+FROM   employees
+WHERE  salary > ALL (SELECT salary FROM employees WHERE dept_id = 10)
+ORDER  BY salary DESC`,
+  },
+  {
+    id: 'any-all-2', topicId: 'any-all', difficulty: 2,
+    title: '至少比研發部某個人低薪',
+    prompt: '找出薪水比研發部（dept_id = 20）「至少一位」員工還低的員工，顯示 emp_name、salary，研發部自己的人不算。依 salary、emp_name 排序。請用 ANY 完成。',
+    hint: 'salary < ANY (子查詢)：只要比其中任何一個值小就成立，等價於「小於其中的最大值」。另外注意 dept_id <> 20 會把 dept_id 是 NULL 的人濾掉，要另外補 OR dept_id IS NULL。',
+    requires: ['ANY'], ordered: true,
+    solution: `SELECT emp_name, salary
+FROM   employees
+WHERE  (dept_id <> 20 OR dept_id IS NULL)
+AND    salary < ANY (SELECT salary FROM employees WHERE dept_id = 20)
+ORDER  BY salary, emp_name`,
+  },
+
+  // ── 自我連接 ────────────────────────────────────────────────
+  {
+    id: 'self-join-1', topicId: 'self-join', difficulty: 2,
+    title: '員工與他的主管',
+    prompt: '列出每位員工的 emp_name 與直屬主管的姓名 manager_name。沒有主管的人也要出現，manager_name 留 NULL。依 emp_id 排序。',
+    hint: 'employees e LEFT JOIN employees m ON m.emp_id = e.manager_id。同一張表要給兩個不同別名，否則分不出誰是誰。',
+    requires: ['JOIN'], ordered: true,
+    solution: `SELECT e.emp_name, m.emp_name AS manager_name
+FROM   employees e
+LEFT   JOIN employees m ON m.emp_id = e.manager_id
+ORDER  BY e.emp_id`,
+  },
+  {
+    id: 'self-join-2', topicId: 'self-join', difficulty: 3,
+    title: '同一位主管底下的同事配對',
+    prompt: '列出「同一位主管底下」的同事配對，顯示 manager_id、其中一位的姓名 name_a、另一位的姓名 name_b。同一組只出現一次（用 a.emp_id < b.emp_id 控制），也不要自己配自己。依 manager_id、name_a、name_b 排序。',
+    hint: 'ON 裡面除了 b.manager_id = a.manager_id，再加一個 a.emp_id < b.emp_id，就同時解決了「自己配自己」與「A-B 跟 B-A 重複」兩個問題。',
+    requires: ['JOIN'], ordered: true,
+    solution: `SELECT a.manager_id, a.emp_name AS name_a, b.emp_name AS name_b
+FROM   employees a
+JOIN   employees b ON b.manager_id = a.manager_id
+                  AND a.emp_id < b.emp_id
+ORDER  BY a.manager_id, name_a, name_b`,
+  },
+
+  // ── CROSS JOIN / 非等值連接 ─────────────────────────────────
+  {
+    id: 'cross-nonequi-1', topicId: 'cross-nonequi', difficulty: 2,
+    title: '薪水落在哪個級距',
+    prompt: '列出每位員工的 emp_name、salary、所屬級距 grade 與年終倍率 bonus_rate。employees 跟 salary_grades 之間沒有外鍵，要用 BETWEEN 做非等值連接。依 emp_id 排序。',
+    hint: 'ON e.salary BETWEEN g.min_sal AND g.max_sal。ON 裡面不是只能寫 =，任何條件都可以。',
+    requires: ['JOIN', 'BETWEEN'], ordered: true,
+    solution: `SELECT e.emp_name, e.salary, g.grade, g.bonus_rate
+FROM   employees e
+JOIN   salary_grades g ON e.salary BETWEEN g.min_sal AND g.max_sal
+ORDER  BY e.emp_id`,
+  },
+  {
+    id: 'cross-nonequi-2', topicId: 'cross-nonequi', difficulty: 2,
+    title: '部門 × 級距對照表',
+    prompt: '用 CROSS JOIN 產生「每個部門 × 每個級距」的所有組合，顯示 dept_name、grade。依 dept_id、grade 排序。',
+    hint: 'CROSS JOIN 不需要 ON，直接把兩邊每一列都配一次。5 個部門 × 4 個級距 = 20 列。',
+    requires: ['CROSS JOIN'], ordered: true,
+    solution: `SELECT d.dept_name, g.grade
+FROM   departments d
+CROSS  JOIN salary_grades g
+ORDER  BY d.dept_id, g.grade`,
+  },
+
+  // ── LIKE / BETWEEN / IS NULL ────────────────────────────────
+  {
+    id: 'like-between-1', topicId: 'like-between', difficulty: 1,
+    title: '找出主管職',
+    prompt: "找出職稱 job 以 'MGR' 結尾的員工，顯示 emp_name、job，依 emp_id 排序。",
+    hint: "LIKE '%MGR'：% 代表任意長度（含 0 個字）。想要「剛好一個字」用底線 _。",
+    requires: ['LIKE'], ordered: true,
+    solution: `SELECT emp_name, job
+FROM   employees
+WHERE  job LIKE '%MGR'
+ORDER  BY emp_id`,
+  },
+  {
+    id: 'like-between-2', topicId: 'like-between', difficulty: 2,
+    title: '薪資區間又沒填信箱',
+    prompt: '找出薪資介於 50000 與 80000（含兩端）、而且 email 是 NULL 的員工，顯示 emp_name、salary，依 emp_id 排序。',
+    hint: 'BETWEEN 是含頭含尾的閉區間。NULL 不能用 = NULL 或 <> NULL 判斷，只能用 IS NULL / IS NOT NULL。',
+    requires: ['BETWEEN', 'IS NULL'], ordered: true,
+    solution: `SELECT emp_name, salary
+FROM   employees
+WHERE  salary BETWEEN 50000 AND 80000
+AND    email IS NULL
+ORDER  BY emp_id`,
+  },
+
+  // ── Top-N 與分頁 ────────────────────────────────────────────
+  {
+    id: 'top-n-1', topicId: 'top-n', difficulty: 1,
+    title: '薪資前三高',
+    prompt: '找出薪水最高的前 3 位，顯示 emp_name、salary，依 salary 由大到小排序。請用 FETCH FIRST 寫法。',
+    hint: 'ORDER BY salary DESC 之後接 FETCH FIRST 3 ROWS ONLY。這是 Oracle 12c 之後才有的語法。',
+    requires: ['FETCH FIRST'], ordered: true,
+    solution: `SELECT emp_name, salary
+FROM   employees
+ORDER  BY salary DESC
+FETCH  FIRST 3 ROWS ONLY`,
+  },
+  {
+    id: 'top-n-2', topicId: 'top-n', difficulty: 2,
+    title: '薪資排名第 4 到第 6',
+    prompt: '用分頁寫法取出薪資排名第 4 到第 6 名的員工，顯示 emp_name、salary，依 salary 由大到小排序。',
+    hint: 'OFFSET 3 ROWS FETCH NEXT 3 ROWS ONLY：先跳過 3 筆，再取 3 筆。OFFSET 一定要寫在 FETCH 前面。',
+    requires: ['OFFSET', 'FETCH'], ordered: true,
+    solution: `SELECT emp_name, salary
+FROM   employees
+ORDER  BY salary DESC
+OFFSET 3 ROWS FETCH NEXT 3 ROWS ONLY`,
+  },
+  {
+    id: 'top-n-3', topicId: 'top-n', difficulty: 2,
+    title: 'ROWNUM 的舊寫法',
+    prompt: '用 ROWNUM 的舊寫法取出薪資最高的 3 位，顯示 emp_name、salary。',
+    hint: 'ROWNUM 是「資料被取出來的當下才編號」，所以直接寫 WHERE ROWNUM <= 3 ORDER BY salary DESC 會拿到隨便三個人再排序。正確做法是先把排好序的查詢包成子查詢，外層再篩 ROWNUM。',
+    requires: ['ROWNUM'], ordered: true,
+    solution: `SELECT emp_name, salary
+FROM ( SELECT emp_name, salary
+       FROM   employees
+       ORDER  BY salary DESC )
+WHERE  ROWNUM <= 3`,
+  },
+
+  // ── ORDER BY 與 NULL 排序 ───────────────────────────────────
+  {
+    id: 'order-null-1', topicId: 'order-null', difficulty: 2,
+    title: '把 NULL 排到最前面',
+    prompt: '列出所有員工的 emp_name 與 commission_pct，依 commission_pct 由小到大排，但沒填的（NULL）要排在最前面；NULL 之間、數值相同時再依 emp_id 排。',
+    hint: 'Oracle 的 ASC 預設 NULL 在最後，要反過來就加 NULLS FIRST。寫法是 ORDER BY commission_pct NULLS FIRST, emp_id。',
+    requires: ['NULLS FIRST'], ordered: true,
+    solution: `SELECT emp_name, commission_pct
+FROM   employees
+ORDER  BY commission_pct NULLS FIRST, emp_id`,
+  },
+  {
+    id: 'order-null-2', topicId: 'order-null', difficulty: 2,
+    title: '用別名排序',
+    prompt: '算出每個部門的人數，顯示 dept_id、cnt（沒有部門的員工歸成一組，dept_id 是 NULL）。依 cnt 由大到小排，人數相同時依 dept_id 由小到大，且 NULL 的 dept_id 排在最後。',
+    hint: 'ORDER BY 可以直接用 SELECT 裡取的別名。dept_id 升冪時 Oracle 預設 NULL 就在最後，剛好符合要求。',
+    requires: ['GROUP BY'], ordered: true,
+    solution: `SELECT dept_id, COUNT(*) AS cnt
+FROM   employees
+GROUP  BY dept_id
+ORDER  BY cnt DESC, dept_id`,
+  },
+
+  // ── 字串函數 ────────────────────────────────────────────────
+  {
+    id: 'string-func-1', topicId: 'string-func', difficulty: 2,
+    title: '做一張員工名牌',
+    prompt: '產生每位員工的名牌字串 label，格式是「姓名（職稱）」，例如 王大明（SALES_MGR）；另外取出姓氏 surname，也就是姓名的第一個字。顯示 emp_id、label、surname，依 emp_id 排序。',
+    hint: 'Oracle 用 || 串字串（不是 +，也不是 CONCAT 接一堆）。SUBSTR(emp_name, 1, 1) 從第 1 個字取 1 個字，Oracle 的位置從 1 開始算。',
+    requires: ['SUBSTR'], ordered: true,
+    solution: `SELECT emp_id,
+       emp_name || '（' || job || '）' AS label,
+       SUBSTR(emp_name, 1, 1)          AS surname
+FROM   employees
+ORDER  BY emp_id`,
+  },
+  {
+    id: 'string-func-2', topicId: 'string-func', difficulty: 2,
+    title: '從 email 取出帳號',
+    prompt: "列出有填 email 的員工，顯示 emp_name、email，以及 '@' 前面的帳號 account。依 emp_id 排序。",
+    hint: "INSTR(email, '@') 回傳 @ 的位置，再用 SUBSTR(email, 1, 位置 - 1) 把前面那段切出來。",
+    requires: ['INSTR', 'SUBSTR'], ordered: true,
+    solution: `SELECT emp_name, email,
+       SUBSTR(email, 1, INSTR(email, '@') - 1) AS account
+FROM   employees
+WHERE  email IS NOT NULL
+ORDER  BY emp_id`,
+  },
+
+  // ── 日期函數 ────────────────────────────────────────────────
+  {
+    id: 'date-func-1', topicId: 'date-func', difficulty: 2,
+    title: '每年到職人數',
+    prompt: '依到職年份分組，算出每一年到職的人數，顯示 hire_year、cnt，依 hire_year 排序。請用 EXTRACT 取年份。',
+    hint: 'EXTRACT(YEAR FROM hire_date)。GROUP BY 裡也要寫一次同樣的算式（不能只寫別名）。',
+    requires: ['EXTRACT'], ordered: true,
+    solution: `SELECT EXTRACT(YEAR FROM hire_date) AS hire_year, COUNT(*) AS cnt
+FROM   employees
+GROUP  BY EXTRACT(YEAR FROM hire_date)
+ORDER  BY hire_year`,
+  },
+  {
+    id: 'date-func-2', topicId: 'date-func', difficulty: 3,
+    title: '算年資',
+    prompt: '列出每位員工的 emp_name、hire_date，以及到 SYSDATE 為止的年資 years（整數年，不滿一年無條件捨去）。依 years 由大到小、emp_id 排序。',
+    hint: 'MONTHS_BETWEEN(SYSDATE, hire_date) 算出相差幾個月（會有小數），除以 12 再 FLOOR。本站的 SYSDATE 固定在 2024-09-30。',
+    requires: ['MONTHS_BETWEEN'], ordered: true,
+    solution: `SELECT emp_name, hire_date,
+       FLOOR(MONTHS_BETWEEN(SYSDATE, hire_date) / 12) AS years
+FROM   employees
+ORDER  BY years DESC, emp_id`,
+  },
+
+  // ── 數值函數 ────────────────────────────────────────────────
+  {
+    id: 'number-func-1', topicId: 'number-func', difficulty: 2,
+    title: '實際年薪',
+    prompt: '算出每位員工的實際年薪 annual_pay = salary × 12 ×（1 + 獎金比例），獎金比例是 NULL 時當成 0，四捨五入到整數；另外用 TRUNC 算出「捨去到千位」的 annual_k。顯示 emp_name、annual_pay、annual_k，依 annual_pay 由大到小排序。',
+    hint: 'ROUND(x, 0) 四捨五入到整數；TRUNC(x, -3) 的負數位數表示往整數位砍，-3 就是砍到千位。NULL 參與運算結果會是 NULL，所以 commission_pct 要先用 NVL 補 0。',
+    requires: ['ROUND', 'TRUNC'], ordered: true,
+    solution: `SELECT emp_name,
+       ROUND(salary * 12 * (1 + NVL(commission_pct, 0)), 0) AS annual_pay,
+       TRUNC(ROUND(salary * 12 * (1 + NVL(commission_pct, 0)), 0), -3) AS annual_k
+FROM   employees
+ORDER  BY annual_pay DESC`,
+  },
+  {
+    id: 'number-func-2', topicId: 'number-func', difficulty: 2,
+    title: '用餘數分組',
+    prompt: '用 MOD 把員工依 emp_id 除以 3 的餘數分成三組，算出每組人數，顯示 grp、cnt，依 grp 排序。',
+    hint: 'MOD(emp_id, 3) 取餘數。SELECT 跟 GROUP BY 都要寫同一個算式。',
+    requires: ['MOD'], ordered: true,
+    solution: `SELECT MOD(emp_id, 3) AS grp, COUNT(*) AS cnt
+FROM   employees
+GROUP  BY MOD(emp_id, 3)
+ORDER  BY grp`,
+  },
+
+  // ── LISTAGG ─────────────────────────────────────────────────
+  {
+    id: 'listagg-1', topicId: 'listagg', difficulty: 2,
+    title: '部門成員名單',
+    prompt: "依部門把成員姓名串成一個字串，顯示 dept_id、members（用 '、' 分隔，依 emp_id 排序）。沒有部門的員工不算，依 dept_id 排序。",
+    hint: "LISTAGG(emp_name, '、') WITHIN GROUP (ORDER BY emp_id)。它是聚合函數，所以要搭配 GROUP BY。",
+    requires: ['LISTAGG'], ordered: true,
+    solution: `SELECT dept_id,
+       LISTAGG(emp_name, '、') WITHIN GROUP (ORDER BY emp_id) AS members
+FROM   employees
+WHERE  dept_id IS NOT NULL
+GROUP  BY dept_id
+ORDER  BY dept_id`,
+  },
+  {
+    id: 'listagg-2', topicId: 'listagg', difficulty: 3,
+    title: '專案成員名單',
+    prompt: "每個有成員的專案列出 proj_name、參與成員名單 members（用 ', ' 分隔，依 emp_id 排序）與人數 cnt。依 proj_id 排序。",
+    hint: '三張表串起來：emp_projects 是中間表，往左接 projects、往右接 employees。GROUP BY 要把 proj_id 跟 proj_name 都放進去。',
+    requires: ['LISTAGG', 'JOIN'], ordered: true,
+    solution: `SELECT p.proj_name,
+       LISTAGG(e.emp_name, ', ') WITHIN GROUP (ORDER BY e.emp_id) AS members,
+       COUNT(*) AS cnt
+FROM   emp_projects ep
+JOIN   projects  p ON p.proj_id = ep.proj_id
+JOIN   employees e ON e.emp_id  = ep.emp_id
+GROUP  BY p.proj_id, p.proj_name
+ORDER  BY p.proj_id`,
+  },
+
+  // ── COALESCE / NULLIF ───────────────────────────────────────
+  {
+    id: 'coalesce-1', topicId: 'coalesce', difficulty: 2,
+    title: '補上預設的聯絡方式',
+    prompt: "列出每位員工的 emp_name、聯絡方式 contact（有 email 就用 email，沒有就顯示 '（未提供）'），以及 comm（commission_pct 有值就用它，沒有就用 0）。請用 COALESCE 完成，依 emp_id 排序。",
+    hint: 'COALESCE 由左往右回傳第一個不是 NULL 的值，參數可以放很多個，NVL 則只能兩個。',
+    requires: ['COALESCE'], ordered: true,
+    solution: `SELECT emp_name,
+       COALESCE(email, '（未提供）') AS contact,
+       COALESCE(commission_pct, 0)  AS comm
+FROM   employees
+ORDER  BY emp_id`,
+  },
+  {
+    id: 'coalesce-2', topicId: 'coalesce', difficulty: 3,
+    title: '用 NULLIF 擋掉除以零',
+    prompt: '做一張部門資源表：dept_name、人數 head_count、專案預算總和 total_budget（沒有專案的部門顯示 0）、以及平均每人分到的預算 per_head（四捨五入到整數）。人數為 0 的部門 per_head 要是 NULL，不能讓它除以零。所有部門都要出現，依 dept_id 排序。',
+    hint: 'NULLIF(head_count, 0)：等於 0 時回 NULL，NULL 當分母整個算式就是 NULL，不會報錯。人數跟預算都可以用純量子查詢取。',
+    requires: ['NULLIF'], ordered: true,
+    solution: `SELECT d.dept_name,
+       (SELECT COUNT(*) FROM employees e WHERE e.dept_id = d.dept_id) AS head_count,
+       NVL((SELECT SUM(p.budget) FROM projects p WHERE p.dept_id = d.dept_id), 0) AS total_budget,
+       ROUND(NVL((SELECT SUM(p.budget) FROM projects p WHERE p.dept_id = d.dept_id), 0) * 1.0
+             / NULLIF((SELECT COUNT(*) FROM employees e WHERE e.dept_id = d.dept_id), 0), 0) AS per_head
+FROM   departments d
+ORDER  BY d.dept_id`,
+  },
+
+  // ── INSERT / DELETE ─────────────────────────────────────────
+  {
+    id: 'insert-delete-1', topicId: 'insert-delete', difficulty: 2,
+    kind: 'dml', affects: ['emp_bonus'],
+    title: '補齊獎金名單',
+    prompt: "emp_bonus 目前只有 3 筆。請用 INSERT ... SELECT 把「還沒有獎金紀錄」的員工一次補進去：bonus_amt = salary × 該級距的 bonus_rate、grade 取級距代碼、updated_at 填 '2024-09-30'。已經有紀錄的人不要重複新增。",
+    hint: 'INSERT INTO ... SELECT 可以把一整段查詢的結果灌進表裡，不用一筆一筆 VALUES。級距用 BETWEEN 對應，排除已有紀錄用 NOT IN (SELECT emp_id FROM emp_bonus)。',
+    requires: ['INSERT', 'SELECT'],
+    solution: `INSERT INTO emp_bonus (emp_id, bonus_amt, grade, updated_at)
+SELECT e.emp_id, e.salary * g.bonus_rate, g.grade, '2024-09-30'
+FROM   employees e
+JOIN   salary_grades g ON e.salary BETWEEN g.min_sal AND g.max_sal
+WHERE  e.emp_id NOT IN (SELECT emp_id FROM emp_bonus)`,
+  },
+  {
+    id: 'insert-delete-2', topicId: 'insert-delete', difficulty: 2,
+    kind: 'dml', affects: ['salary_adjust'],
+    title: '清掉對不到員工的調薪申請',
+    prompt: 'salary_adjust 裡有一筆 emp_id 在 employees 找不到的孤兒資料。請用 DELETE 搭配 NOT EXISTS 把這種資料刪掉，其他的都要留著。',
+    hint: 'DELETE FROM salary_adjust WHERE NOT EXISTS (SELECT 1 FROM employees e WHERE e.emp_id = salary_adjust.emp_id)。子查詢裡要用完整表名去引用外層被刪的那張表。',
+    requires: ['DELETE', 'NOT EXISTS'],
+    solution: `DELETE FROM salary_adjust
+WHERE  NOT EXISTS ( SELECT 1
+                    FROM   employees e
+                    WHERE  e.emp_id = salary_adjust.emp_id )`,
+  },
 ];
 
 export const COMBOS = [
@@ -810,6 +1717,73 @@ WHEN MATCHED THEN
 WHEN NOT MATCHED THEN
   INSERT (emp_id, bonus_amt, grade, updated_at)
   VALUES (s.emp_id, s.bonus_amt, s.grade, '2024-09-30')`,
+  },
+
+  {
+    id: 'combo-7', difficulty: 3, topicIds: ['with-cte', 'rank', 'inner-join'],
+    title: '各部門薪資前兩名',
+    prompt: '用 WITH 先算出每位員工在自己部門內的薪資名次（由高到低，薪水相同算同名次），再列出名次在前 2 名的人：dept_name、emp_name、salary、名次 rk。沒有部門的員工不算，依 dept_id、rk、emp_name 排序。',
+    hint: 'WITH ranked AS ( ... DENSE_RANK() OVER (PARTITION BY dept_id ORDER BY salary DESC) AS rk ... ) 之後，外層就能直接 WHERE rk <= 2，再 JOIN departments 取部門名稱。',
+    requires: ['WITH', 'DENSE_RANK'], ordered: true,
+    solution: `WITH ranked AS (
+  SELECT dept_id, emp_name, salary,
+         DENSE_RANK() OVER (PARTITION BY dept_id ORDER BY salary DESC) AS rk
+  FROM   employees
+  WHERE  dept_id IS NOT NULL
+)
+SELECT d.dept_name, r.emp_name, r.salary, r.rk
+FROM   ranked r
+JOIN   departments d ON d.dept_id = r.dept_id
+WHERE  r.rk <= 2
+ORDER  BY r.dept_id, r.rk, r.emp_name`,
+  },
+  {
+    id: 'combo-8', difficulty: 3, topicIds: ['window-agg', 'case-when', 'rank'],
+    title: '跟部門平均的比較表',
+    prompt: "只看有部門的員工，列出 emp_name、dept_id、salary、部門平均薪資 dept_avg（四捨五入到整數）、部門人數 dept_cnt，以及比較結果 verdict（高於平均顯示 '高於平均'、剛好等於顯示 '持平'、否則 '低於平均'）。依 dept_id、salary 由大到小排序。",
+    hint: '同一個 OVER (PARTITION BY dept_id) 可以重複用在 AVG、COUNT 與 CASE WHEN 裡。注意 CASE 裡要拿原始的 AVG 比，不要拿四捨五入後的值比。',
+    requires: ['OVER', 'PARTITION BY', 'CASE'], ordered: true,
+    solution: `SELECT emp_name, dept_id, salary,
+       ROUND(AVG(salary) OVER (PARTITION BY dept_id), 0) AS dept_avg,
+       COUNT(*) OVER (PARTITION BY dept_id)              AS dept_cnt,
+       CASE WHEN salary > AVG(salary) OVER (PARTITION BY dept_id) THEN '高於平均'
+            WHEN salary = AVG(salary) OVER (PARTITION BY dept_id) THEN '持平'
+            ELSE '低於平均'
+       END AS verdict
+FROM   employees
+WHERE  dept_id IS NOT NULL
+ORDER  BY dept_id, salary DESC`,
+  },
+  {
+    id: 'combo-9', difficulty: 3, topicIds: ['hierarchy', 'listagg', 'aggregate'],
+    title: '組織每一層的名冊',
+    prompt: "從沒有主管的人開始展開整個組織，統計每一層的人數 cnt 與該層成員名單 members（用 '、' 分隔，依 emp_id 排序）。輸出 lv、cnt、members，依 lv 排序。",
+    hint: 'CONNECT BY 展開之後可以直接接 GROUP BY LEVEL，把 LEVEL 當成一般欄位聚合。名單用 LISTAGG。',
+    requires: ['CONNECT BY', 'LISTAGG'], ordered: true,
+    solution: `SELECT LEVEL AS lv,
+       COUNT(*) AS cnt,
+       LISTAGG(emp_name, '、') WITHIN GROUP (ORDER BY emp_id) AS members
+FROM   employees
+START WITH manager_id IS NULL
+CONNECT BY PRIOR emp_id = manager_id
+GROUP  BY LEVEL
+ORDER  BY LEVEL`,
+  },
+  {
+    id: 'combo-10', difficulty: 3, topicIds: ['cross-nonequi', 'window-agg', 'group-having', 'listagg'],
+    title: '薪資級距分布',
+    prompt: "把每位員工對到 salary_grades 的級距，統計每個級距的人數 cnt、平均薪資 avg_sal（四捨五入到整數）、成員名單 members（用 '、' 分隔，依 emp_id 排序），以及該級距人數佔全公司的百分比 pct（四捨五入到小數第 1 位）。只列出有人的級距，依 grade 排序。",
+    hint: '非等值連接用 BETWEEN 對級距；佔比的分母是「全公司人數」，可以用 SUM(COUNT(*)) OVER () 在聚合之後再開一次窗拿到總數。',
+    requires: ['BETWEEN', 'GROUP BY', 'LISTAGG', 'OVER'], ordered: true,
+    solution: `SELECT g.grade,
+       COUNT(*) AS cnt,
+       ROUND(AVG(e.salary), 0) AS avg_sal,
+       LISTAGG(e.emp_name, '、') WITHIN GROUP (ORDER BY e.emp_id) AS members,
+       ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 1) AS pct
+FROM   employees e
+JOIN   salary_grades g ON e.salary BETWEEN g.min_sal AND g.max_sal
+GROUP  BY g.grade
+ORDER  BY g.grade`,
   },
 ];
 

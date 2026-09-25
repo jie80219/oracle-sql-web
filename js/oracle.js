@@ -225,9 +225,92 @@ function rewriteRownum(sql) {
   return out;
 }
 
+/** EXTRACT(YEAR FROM d) → CAST(strftime('%Y', d) AS INTEGER) */
+const EXTRACT_UNITS = { YEAR: '%Y', MONTH: '%m', DAY: '%d', HOUR: '%H', MINUTE: '%M', SECOND: '%S' };
+
+function rewriteExtract(sql) {
+  let out = sql;
+  let guard = 0;
+  while (guard++ < 50) {
+    const hits = findCalls(out, 'EXTRACT');
+    if (!hits.length) break;
+    const h = hits[0];
+    const inner = out.slice(h.open + 1, h.close);
+    const m = /^\s*([A-Za-z_]+)\s+FROM\s+([\s\S]+)$/i.exec(inner);
+    if (!m) break;
+    const fmt = EXTRACT_UNITS[m[1].toUpperCase()];
+    if (!fmt) {
+      throw new Error(`EXTRACT 目前只支援 YEAR / MONTH / DAY / HOUR / MINUTE / SECOND，收到 ${m[1]}。`);
+    }
+    out = out.slice(0, h.start)
+        + `CAST(strftime('${fmt}', ${m[2].trim()}) AS INTEGER)`
+        + out.slice(h.close + 1);
+  }
+  return out;
+}
+
+/**
+ * 把子查詢的單一選取欄位改名成 _v，這樣外面才能對它做聚合。
+ * SELECT salary FROM … → SELECT salary AS _v FROM …
+ */
+function aliasSingleColumn(sub) {
+  const mask = maskLiterals(sub);
+  const sel = /\bSELECT\b(\s+DISTINCT\b)?/i.exec(mask);
+  if (!sel) return sub;
+  const listStart = sel.index + sel[0].length;
+  const from = findTopLevel(sub, /\bFROM\b/, listStart);
+  const listEnd = from ? from.index : sub.length;
+  const item = sub.slice(listStart, listEnd).trim();
+  if (!item || splitTopLevel(item).length !== 1) return sub;
+  const bare = item.replace(/\s+(?:AS\s+)?[A-Za-z_][\w$]*\s*$/i, (t) =>
+    /\s+AS\s+/i.test(t) ? '' : t);
+  return sub.slice(0, listStart) + ` ${bare} AS _v ` + sub.slice(listEnd);
+}
+
+/** x > ALL (…) → x > (SELECT MAX(_v) FROM (…))；= ANY → IN、<> ALL → NOT IN */
+const ANY_ALL_AGG = {
+  '>ALL': 'MAX', '>=ALL': 'MAX', '<ALL': 'MIN', '<=ALL': 'MIN',
+  '>ANY': 'MIN', '>=ANY': 'MIN', '<ANY': 'MAX', '<=ANY': 'MAX',
+};
+
+function rewriteAnyAll(sql) {
+  let out = sql;
+  let guard = 0;
+  while (guard++ < 30) {
+    const mask = maskLiterals(out);
+    const m = /(<=|>=|<>|!=|=|<|>)\s*(ALL|ANY|SOME)\s*\(/i.exec(mask);
+    if (!m) break;
+    const op = m[1];
+    const quant = m[2].toUpperCase() === 'SOME' ? 'ANY' : m[2].toUpperCase();
+    const open = m.index + m[0].length - 1;
+    const close = matchParen(out, open, mask);
+    if (close === -1) break;
+    const sub = out.slice(open + 1, close).trim();
+
+    let repl;
+    if (op === '=' && quant === 'ANY') {
+      repl = ` IN (${sub})`;
+    } else if ((op === '<>' || op === '!=') && quant === 'ALL') {
+      repl = ` NOT IN (${sub})`;
+    } else {
+      const agg = ANY_ALL_AGG[op + quant];
+      if (!agg) {
+        throw new Error(`${op} ${quant} 這個組合本站尚未支援，請改寫成 EXISTS 或聚合子查詢。`);
+      }
+      repl = ` ${op} (SELECT ${agg}(_v) FROM (${aliasSingleColumn(sub)}))`;
+    }
+    out = out.slice(0, m.index) + repl + out.slice(close + 1);
+  }
+  return out;
+}
+
 /** Oracle 12c 的 FETCH FIRST n ROWS ONLY → LIMIT n */
 function rewriteFetchFirst(sql) {
-  let out = replaceOutside(sql, /\bFETCH\s+(?:FIRST|NEXT)\s+(\d+)\s+ROWS?\s+ONLY\b/gi,
+  // OFFSET n ROWS FETCH NEXT m ROWS ONLY：SQLite 的順序相反，要一起處理
+  let out = replaceOutside(sql,
+    /\bOFFSET\s+(\d+)\s+ROWS?\s+FETCH\s+(?:FIRST|NEXT)\s+(\d+)\s+ROWS?\s+ONLY\b/gi,
+    (t) => { const n = t.match(/\d+/g); return `LIMIT ${n[1]} OFFSET ${n[0]}`; });
+  out = replaceOutside(out, /\bFETCH\s+(?:FIRST|NEXT)\s+(\d+)\s+ROWS?\s+ONLY\b/gi,
     (t) => 'LIMIT ' + /\d+/.exec(t)[0]);
   out = replaceOutside(out, /\bOFFSET\s+(\d+)\s+ROWS?\b/gi, (t) => 'OFFSET ' + /\d+/.exec(t)[0]);
   return out;
@@ -274,6 +357,8 @@ function rewriteCommon(sql) {
   }
   out = rewriteListagg(out);
   out = rewriteDecode(out);
+  out = rewriteExtract(out);
+  out = rewriteAnyAll(out);
   out = replaceOutside(out, /\bMINUS\b/gi, () => 'EXCEPT');
   out = replaceOutside(out, /\b(?:DATE|TIMESTAMP)\s+(?=')/gi, () => '');
   out = replaceOutside(out, /\bGREATEST\s*\(/gi, () => 'max(');
@@ -494,6 +579,150 @@ function translateMerge(sql) {
   return out;
 }
 
+// ── CONNECT BY 階層查詢 ────────────────────────────────────────────
+
+// 連接條件裡不該被當成欄位、不用補資料表別名的字
+const CB_NON_COLUMN = new Set([
+  'AND', 'OR', 'NOT', 'IS', 'NULL', 'IN', 'LIKE', 'BETWEEN', 'EXISTS',
+  'PRIOR', 'NOCYCLE', 'LEVEL', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END',
+  'SELECT', 'FROM', 'WHERE', 'TRUE', 'FALSE',
+]);
+
+/**
+ * CONNECT BY 的條件裡，PRIOR x 指的是「上一層那一列」，其餘指的是目前這一列。
+ * 遞迴成員寫成 FROM t <alias> JOIN _cb _p，所以 PRIOR → _p.、其餘裸欄位 → <alias>.
+ */
+function qualifyConnectCondition(cond, alias) {
+  let out = replaceOutside(cond, /\bPRIOR\s+(?:[A-Za-z_][\w$]*\s*\.\s*)?([A-Za-z_][\w$]*)/gi,
+    (t) => '_p.' + /([A-Za-z_][\w$]*)\s*$/.exec(t)[1]);
+  const mask = maskLiterals(out);
+  let res = '';
+  let last = 0;
+  const re = /[A-Za-z_][\w$]*/g;
+  let m;
+  while ((m = re.exec(mask)) !== null) {
+    const word = m[0];
+    const before = out.slice(0, m.index);
+    const after = out.slice(m.index + word.length);
+    const qualified = /\.\s*$/.test(before);
+    const isCall = /^\s*\(/.test(after);
+    const isAliasOfNext = /^\s*\./.test(after);
+    if (qualified || isCall || isAliasOfNext || CB_NON_COLUMN.has(word.toUpperCase())) continue;
+    res += out.slice(last, m.index) + alias + '.' + word;
+    last = m.index + word.length;
+  }
+  return res + out.slice(last);
+}
+
+/**
+ * SELECT … FROM t START WITH … CONNECT BY PRIOR a = b
+ *   → WITH RECURSIVE _cb AS ( 起點 UNION ALL 逐層往下 ) SELECT … FROM _cb
+ * 支援 LEVEL 與 SYS_CONNECT_BY_PATH，只處理單一資料表的階層。
+ */
+function translateConnectBy(sql) {
+  const cb = findTopLevel(sql, /\bCONNECT\s+BY\b/);
+  if (!cb) return null;
+
+  const selM = findTopLevel(sql, /\bSELECT\b/);
+  const fromM = selM ? findTopLevel(sql, /\bFROM\b/, selM.index + selM.length) : null;
+  if (!selM || !fromM) throw new Error('CONNECT BY 查詢需要 SELECT … FROM … 的形式。');
+
+  const clausePatterns = [
+    ['where', /\bWHERE\b/],
+    ['start', /\bSTART\s+WITH\b/],
+    ['connect', /\bCONNECT\s+BY\b/],
+    ['group', /\bGROUP\s+BY\b/],
+    ['having', /\bHAVING\b/],
+    ['order', /\bORDER\s+(?:SIBLINGS\s+)?BY\b/],
+  ];
+  const marks = [];
+  for (const [name, pat] of clausePatterns) {
+    const hit = findTopLevel(sql, pat, fromM.index + fromM.length);
+    if (hit) marks.push({ name, ...hit });
+  }
+  marks.sort((a, b) => a.index - b.index);
+
+  const tableEnd = marks.length ? marks[0].index : sql.length;
+  const fromPart = sql.slice(fromM.index + fromM.length, tableEnd).trim();
+  const tm = /^([A-Za-z_][\w$]*)(?:\s+(?:AS\s+)?([A-Za-z_][\w$]*))?$/i.exec(fromPart);
+  if (!tm) {
+    throw new Error('CONNECT BY 目前只支援單一資料表的階層查詢，例如 FROM employees e。');
+  }
+  const table = tm[1];
+  const alias = tm[2] || tm[1];
+
+  const body = {};
+  marks.forEach((mk, i) => {
+    const end = i + 1 < marks.length ? marks[i + 1].index : sql.length;
+    body[mk.name] = sql.slice(mk.index + mk.length, end).trim();
+    if (mk.name === 'order') body.order = sql.slice(mk.index, end).replace(/\bSIBLINGS\s+/i, '').trim();
+  });
+
+  if (!body.start) throw new Error('CONNECT BY 需要搭配 START WITH 指定起點。');
+  const connect = (body.connect || '').replace(/^\s*NOCYCLE\b/i, '').trim();
+  if (!connect) throw new Error('CONNECT BY 後面要寫連接條件，例如 CONNECT BY PRIOR emp_id = manager_id。');
+
+  let selectList = sql.slice(selM.index + selM.length, fromM.index).trim();
+
+  // SYS_CONNECT_BY_PATH(col, '/') → 在遞迴裡累積一個 _cbpath 欄位
+  let pathAnchor = '';
+  let pathStep = '';
+  const pathHits = findCalls(selectList, 'SYS_CONNECT_BY_PATH');
+  if (pathHits.length) {
+    const args = splitTopLevel(selectList.slice(pathHits[0].open + 1, pathHits[0].close));
+    if (args.length !== 2) throw new Error("SYS_CONNECT_BY_PATH 需要兩個參數，例如 SYS_CONNECT_BY_PATH(emp_name, '/')。");
+    const [expr, sep] = args;
+    pathAnchor = `, ${sep} || ${qualifyBare(expr, alias)} AS _cbpath`;
+    pathStep = `, _p._cbpath || ${sep} || ${qualifyBare(expr, alias)}`;
+    for (const h of [...pathHits].reverse()) {
+      selectList = selectList.slice(0, h.start) + '_cbpath' + selectList.slice(h.close + 1);
+    }
+  }
+
+  const anchorWhere = qualifyBare(body.start, alias);
+  const stepOn = qualifyConnectCondition(connect, alias);
+
+  const cte =
+`WITH RECURSIVE _cb AS (
+  SELECT ${alias}.*, 1 AS LEVEL${pathAnchor}
+  FROM   ${table} ${alias}
+  WHERE  ${anchorWhere}
+  UNION ALL
+  SELECT ${alias}.*, _p.LEVEL + 1${pathStep}
+  FROM   ${table} ${alias}
+  JOIN   _cb _p ON ${stepOn}
+  WHERE  _p.LEVEL < 100
+)
+SELECT ${selectList}
+FROM   _cb ${alias}`;
+
+  const tail = [
+    body.where  ? `WHERE ${body.where}` : '',
+    body.group  ? `GROUP BY ${body.group}` : '',
+    body.having ? `HAVING ${body.having}` : '',
+    body.order || '',
+  ].filter(Boolean).join('\n');
+  return tail ? `${cte}\n${tail}` : cte;
+}
+
+/** START WITH 的條件只讀得到起點那張表，補上別名即可 */
+function qualifyBare(cond, alias) {
+  const mask = maskLiterals(cond);
+  let res = '';
+  let last = 0;
+  const re = /[A-Za-z_][\w$]*/g;
+  let m;
+  while ((m = re.exec(mask)) !== null) {
+    const word = m[0];
+    const before = cond.slice(0, m.index);
+    const after = cond.slice(m.index + word.length);
+    if (/\.\s*$/.test(before) || /^\s*[(.]/.test(after) || CB_NON_COLUMN.has(word.toUpperCase())) continue;
+    res += cond.slice(last, m.index) + alias + '.' + word;
+    last = m.index + word.length;
+  }
+  return res + cond.slice(last);
+}
+
 // ── 對外入口 ──────────────────────────────────────────────────────
 
 export function translateStatement(stmt) {
@@ -502,6 +731,7 @@ export function translateStatement(stmt) {
   const head = maskLiterals(s).trimStart().slice(0, 12).toUpperCase();
   let produced;
   if (head.startsWith('MERGE')) produced = translateMerge(s);
+  else if (findTopLevel(s, /\bCONNECT\s+BY\b/)) produced = [translateConnectBy(s)];
   else if (/^UPDATE\s*\(/i.test(maskLiterals(s).trim())) produced = [translateUpdateJoinView(s)];
   else if (head.startsWith('UPDATE')) produced = [rewriteSimpleUpdate(s)];
   else produced = [s];
@@ -626,6 +856,14 @@ export const DIALECT_NOTES = [
   ['DUAL', '真的建了一張 dual 表，SELECT … FROM DUAL 可直接用'],
   ['(+) 外連接', '不支援，請改用 LEFT / RIGHT / FULL JOIN'],
   ['ORDER BY 的 NULL', 'Oracle 預設 ASC→NULLS LAST、DESC→NULLS FIRST，本站會自動補上讓順序一致'],
-  ['FETCH FIRST n ROWS ONLY', '轉成 LIMIT n，OFFSET n ROWS 轉成 OFFSET n'],
+  ['FETCH FIRST n ROWS ONLY', '轉成 LIMIT n；OFFSET n ROWS FETCH NEXT m ROWS ONLY 轉成 LIMIT m OFFSET n'],
   ['日期型別', '以 YYYY-MM-DD 的文字儲存，TO_CHAR / TRUNC / ADD_MONTHS 均可用'],
+  ['分析函數', 'ROW_NUMBER / RANK / DENSE_RANK / NTILE / LAG / LEAD / FIRST_VALUE / LAST_VALUE 與 SUM…OVER 由 SQLite 原生支援，OVER、PARTITION BY、ROWS BETWEEN 寫法完全相同'],
+  ['WITH（CTE）', '原生支援，包含 WITH RECURSIVE'],
+  ['EXTRACT(unit FROM date)', '轉成 CAST(strftime(…) AS INTEGER)，支援 YEAR / MONTH / DAY / HOUR / MINUTE / SECOND'],
+  ['ANY / ALL / SOME', '= ANY 轉成 IN、<> ALL 轉成 NOT IN，其餘比較運算子改寫成 MAX / MIN 的子查詢；注意子查詢為空集合時 Oracle 的 > ALL 為真，本站會得到 NULL'],
+  ['CONNECT BY / START WITH', '改寫成 WITH RECURSIVE，支援 LEVEL、PRIOR、NOCYCLE、SYS_CONNECT_BY_PATH，限單一資料表、最多 100 層；ORDER SIBLINGS BY 會退化成一般 ORDER BY，CONNECT_BY_ROOT 與 CONNECT_BY_ISLEAF 不支援'],
+  ['LISTAGG', '轉成 group_concat；WITHIN GROUP (ORDER BY …) 會被忽略，串接順序以掃描順序為準'],
+  ['ROLLUP / CUBE / GROUPING SETS', '不支援，請改用 UNION ALL 自己把小計列組起來'],
+  ['PIVOT / UNPIVOT', '不支援，請改用 CASE WHEN 搭配聚合函數做行列轉換'],
 ];

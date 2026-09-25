@@ -11,6 +11,12 @@ const KEYWORDS = [
   'NULLS FIRST', 'NULLS LAST', 'UNION', 'UNION ALL', 'MINUS', 'INTERSECT',
   'INSERT INTO', 'VALUES', 'UPDATE', 'SET', 'DELETE FROM', 'MERGE INTO', 'USING',
   'WHEN MATCHED THEN', 'WHEN NOT MATCHED THEN', 'DUAL', 'WITH', 'FETCH FIRST',
+  'OVER', 'PARTITION BY', 'ORDER SIBLINGS BY', 'WITHIN GROUP',
+  'ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW',
+  'ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING',
+  'FETCH NEXT', 'ROWS ONLY', 'OFFSET', 'ROWNUM', 'LEVEL',
+  'START WITH', 'CONNECT BY', 'CONNECT BY PRIOR', 'PRIOR', 'NOCYCLE',
+  'ANY', 'ALL', 'SOME', 'EXTRACT',
 ];
 
 const FUNCTIONS = [
@@ -48,6 +54,21 @@ const FUNCTIONS = [
   ['MONTHS_BETWEEN(', '兩個日期相差幾個月'],
   ['LAST_DAY(', '當月最後一天'],
   ['LISTAGG(', 'LISTAGG(欄位, 分隔符) WITHIN GROUP (ORDER BY …)'],
+  ['CEIL(', '無條件進位'],
+  ['FLOOR(', '無條件捨去'],
+  ['POWER(', 'POWER(底數, 次方)'],
+  ['SQRT(', '平方根'],
+  ['SIGN(', '正負號：1 / 0 / -1'],
+  ['ROW_NUMBER() OVER (', '流水號，同值也不會重複'],
+  ['RANK() OVER (', '排名，並列後會跳號'],
+  ['DENSE_RANK() OVER (', '排名，並列後不跳號'],
+  ['NTILE(', 'NTILE(n) OVER (…)：平均切成 n 組'],
+  ['LAG(', 'LAG(欄位 [, 幾列, 預設值]) OVER (…)：讀上一列'],
+  ['LEAD(', 'LEAD(欄位 [, 幾列, 預設值]) OVER (…)：讀下一列'],
+  ['FIRST_VALUE(', '視窗中的第一列'],
+  ['LAST_VALUE(', '視窗中的最後一列，記得自己開 ROWS 範圍'],
+  ['SYS_CONNECT_BY_PATH(', "SYS_CONNECT_BY_PATH(欄位, '/')：階層路徑"],
+  ['EXTRACT(', 'EXTRACT(YEAR FROM 日期)'],
 ];
 
 const TABLES = [...TABLE_META.map((t) => [t.name, t.label]), ['dual', 'Oracle 的虛擬單列表']];
