@@ -132,6 +132,20 @@
 
 <script src="vendor/sql-wasm.js"></script>
 <script type="module" src="js/app.js"></script>
+  <div class="pw-overlay" id="pwOverlay" hidden>
+    <form class="pw-panel" id="pwForm" role="dialog" aria-modal="true" aria-labelledby="pwTitle">
+      <h2 id="pwTitle">看解答需要密碼</h2>
+      <p class="pw-note">先自己寫過一輪再看，效果差很多。真的卡住了就輸入密碼。</p>
+      <input type="password" id="pwInput" class="pw-input" autocomplete="off"
+             placeholder="請輸入密碼" aria-describedby="pwError">
+      <p class="pw-error" id="pwError" hidden>密碼不對，再試一次。</p>
+      <div class="pw-actions">
+        <button type="button" class="btn ghost" id="btnPwCancel">取消</button>
+        <button type="submit" class="btn primary" id="btnPwOk">確認</button>
+      </div>
+    </form>
+  </div>
+
   <div class="dg-overlay" id="dgOverlay" hidden>
     <div class="dg-panel" role="dialog" aria-modal="true" aria-labelledby="dgTitle">
       <div class="dg-bar">

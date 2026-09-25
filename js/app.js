@@ -347,6 +347,38 @@ function checkCurrent() {
   }
 }
 
+// 解答密碼。純前端的自律機制，不是資安防護：原始碼裡看得到，
+// 解鎖狀態存在 sessionStorage，關掉分頁就要再輸入一次。
+const SOLUTION_PASSWORD = '123456';
+const UNLOCK_KEY = 'osw:solutionUnlocked';
+
+function solutionUnlocked() {
+  try { return sessionStorage.getItem(UNLOCK_KEY) === '1'; } catch { return false; }
+}
+
+function markUnlocked() {
+  try { sessionStorage.setItem(UNLOCK_KEY, '1'); } catch { /* 忽略 */ }
+}
+
+function openPasswordGate() {
+  const ov = $('pwOverlay');
+  $('pwError').hidden = true;
+  $('pwInput').value = '';
+  ov.hidden = false;
+  $('pwInput').focus();
+}
+
+function closePasswordGate() {
+  $('pwOverlay').hidden = true;
+  $('pwInput').value = '';
+}
+
+function requestSolution() {
+  if (!state.item) return;
+  if (solutionUnlocked()) return showSolution();
+  openPasswordGate();
+}
+
 function showSolution() {
   const item = state.item;
   if (!item) return;
@@ -498,7 +530,7 @@ async function init() {
 
   $('btnRun').onclick = runCurrent;
   $('btnCheck').onclick = checkCurrent;
-  $('btnSolution').onclick = showSolution;
+  $('btnSolution').onclick = requestSolution;
   $('btnClear').onclick = () => {
     $('sqlInput').value = '';
     syncGutter('sqlInput', 'gutter');
@@ -531,8 +563,26 @@ async function init() {
   $('btnDiagramClose').onclick = closeDiagram;
   dg.addEventListener('mousedown', (ev) => { if (ev.target === dg) closeDiagram(); });
   document.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Escape' && !dg.hidden) closeDiagram();
+    if (ev.key !== 'Escape') return;
+    if (!pw.hidden) return closePasswordGate();
+    if (!dg.hidden) closeDiagram();
   });
+
+  const pw = $('pwOverlay');
+  $('pwForm').onsubmit = (ev) => {
+    ev.preventDefault();
+    if ($('pwInput').value !== SOLUTION_PASSWORD) {
+      $('pwError').hidden = false;
+      $('pwInput').select();
+      return;
+    }
+    markUnlocked();
+    closePasswordGate();
+    showSolution();
+  };
+  $('btnPwCancel').onclick = closePasswordGate;
+  pw.addEventListener('mousedown', (ev) => { if (ev.target === pw) closePasswordGate(); });
+  $('pwInput').addEventListener('input', () => { $('pwError').hidden = true; });
 
   $('btnTheme').onclick = toggleTheme;
   $('btnResetProgress').onclick = () => {
