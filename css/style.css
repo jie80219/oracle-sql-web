@@ -498,3 +498,93 @@ footer a { color: var(--accent-text); }
   .dg-panel { border-radius: 0; height: 100%; width: 100%; }
   .dg-body { padding: 12px; }
 }
+
+/* ── 語法小動畫 ─────────────────────────────────────────── */
+
+.an-box {
+  margin: 0 0 10px; padding: 8px 6px 7px; border-radius: 8px;
+  background: var(--surface-2); border: 1px solid var(--border);
+}
+
+.an-viewport {
+  overflow-x: auto;
+  /* 少數步驟兩張表並排真的塞不下，留一條細捲軸讓它捲，不要硬擠 */
+  scrollbar-width: thin;
+  padding-bottom: 2px;
+}
+
+.an-stage { display: flex; flex-direction: column; gap: 4px; min-width: min-content; }
+
+.an-tables { display: flex; align-items: flex-start; justify-content: center; gap: 4px; }
+
+/* 兩張表中間的運算子標記 */
+.an-op {
+  flex: none; align-self: center; font: 600 9.5px var(--mono); letter-spacing: .02em;
+  color: var(--accent-text); background: var(--accent-soft);
+  border: 1px solid var(--border); border-radius: 4px;
+  padding: 2px 3px; max-width: 70px; text-align: center; line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.an-table { flex: 0 1 auto; min-width: 0; }
+.an-tname {
+  font: 600 9.5px var(--mono); color: var(--text-muted); line-height: 1.4;
+  margin-bottom: 3px; overflow-wrap: anywhere;
+}
+
+.an-table table {
+  border-collapse: collapse; width: 100%;
+  background: var(--surface); border: 1px solid var(--border-strong); border-radius: 5px;
+}
+.an-table th {
+  font: 600 9px var(--mono); color: var(--text-muted); text-align: left;
+  padding: 3px 3px; border-bottom: 1px solid var(--border-strong);
+  white-space: nowrap;
+}
+.an-table td {
+  font: 400 10px var(--mono); color: var(--text);
+  padding: 3px 3px; border-bottom: 1px dotted var(--border);
+  white-space: nowrap;
+}
+.an-table tr:last-child td { border-bottom: 0; }
+
+/* 每一列的三種狀態：命中、被排除、補 NULL */
+.an-row { transition: background-color .35s ease, opacity .35s ease; }
+.an-row.is-hit  { background: var(--ok-soft); }
+.an-row.is-hit td { color: var(--ok); font-weight: 600; }
+.an-row.is-miss { opacity: .35; text-decoration: line-through; }
+.an-row.is-null { background: var(--warn-soft); }
+
+.an-null { font: 600 9px var(--mono); color: var(--warn); letter-spacing: .03em; }
+
+.an-out { display: flex; flex-direction: column; align-items: center; gap: 1px; }
+.an-arrowdown { font-size: 9px; color: var(--text-muted); line-height: 1; }
+.an-out .an-table { min-width: 40%; }
+
+.an-note {
+  margin: 7px 0 0; font-size: 11.5px; line-height: 1.55; color: var(--text);
+  min-height: 3.1em;
+}
+
+.an-ctrl { display: flex; align-items: center; gap: 4px; margin-top: 6px; }
+.an-btn {
+  flex: none; border: 1px solid var(--border-strong); background: var(--surface);
+  color: var(--text); border-radius: 5px; padding: 1px 7px;
+  font-size: 11px; line-height: 1.7; transition: .15s;
+}
+.an-btn:hover { border-color: var(--accent); color: var(--accent-text); }
+.an-play { font-size: 9.5px; min-width: 26px; }
+
+.an-dots { display: flex; gap: 4px; margin-left: 3px; }
+.an-dot {
+  width: 6px; height: 6px; border-radius: 99px; background: var(--border-strong);
+  cursor: pointer; transition: .2s;
+}
+.an-dot:hover { background: var(--text-muted); }
+.an-dot.on { background: var(--accent); transform: scale(1.25); }
+
+.an-count { margin-left: auto; font: 400 10px var(--mono); color: var(--text-muted); }
+
+@media (prefers-reduced-motion: reduce) {
+  .an-row, .an-dot { transition: none; }
+}

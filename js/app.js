@@ -6,6 +6,8 @@ import { evaluate, runSql, solutionPreview } from './engine.js';
 import { loadEngine, getSQL, freshDatabase, getSandboxDatabase, resetSandboxDatabase } from './db.js';
 import { attachAutocomplete } from './autocomplete.js';
 import { diagramHtml } from './diagram.js';
+import { mountAnim } from './anim.js';
+import { ANIM_STEPS } from './anim-steps.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
@@ -440,14 +442,33 @@ function renderSyntaxPanel() {
   else if (item) topicIds = item.mode === 'combo' ? (item.topicIds || []) : [item.topicId];
 
   const shown = topicIds.map((id) => TOPICS.find((t) => t.id === id)).filter(Boolean);
+
+  // 舊的 DOM 馬上要被換掉，先把它們的計時器停乾淨再清空清單
+  stopAnims();
+  animStops = [];
+
   $('panelSyntax').innerHTML = shown.length
     ? shown.map((t) => `
       <div class="card panel-card">
         <h4>${esc(t.name)}</h4>
         <p class="summary-text">${esc(t.summary)}</p>
+        ${ANIM_STEPS[t.id] ? `<div class="anim-host" data-topic="${esc(t.id)}"></div>` : ''}
         <pre class="syntax">${esc(t.syntax)}</pre>
       </div>`).join('')
     : '<div class="card panel-card"><p class="summary-text">選一題之後，這裡會顯示對應的語法重點。</p></div>';
+
+  $('panelSyntax').querySelectorAll('.anim-host').forEach((host) => {
+    const t = TOPICS.find((x) => x.id === host.dataset.topic);
+    animStops.push(mountAnim(host, ANIM_STEPS[host.dataset.topic], t ? t.name : ''));
+  });
+}
+
+// 每個掛上去的動畫都回傳一個「暫停」的函式。
+// 只是暫停、不是拆掉：切回語法分頁時按播放還是能繼續，
+// 所以這裡不清空清單，重新 render 面板時才整批換掉。
+let animStops = [];
+function stopAnims() {
+  animStops.forEach((stop) => stop());
 }
 
 function renderDialectPanel() {
@@ -489,6 +510,7 @@ function setPanel(name) {
   $('panelSchema').hidden = name !== 'schema';
   $('panelSyntax').hidden = name !== 'syntax';
   $('panelDialect').hidden = name !== 'dialect';
+  if (name !== 'syntax') stopAnims();   // 切走了就別讓動畫在背景繼續跑
 }
 
 // ── 啟動 ────────────────────────────────────────────────────────
